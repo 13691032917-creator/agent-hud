@@ -1,0 +1,68 @@
+{
+  "refresh_interval_sec": 3,
+  "balance_refresh_sec": 300,
+  "session_max_age_sec": 180,
+  "opacity": 0.96,
+  "always_on_top": true,
+  "providers": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "type": "deepseek",
+      "api_key": "sk-your-deepseek-key",
+      "models": ["deepseek-chat", "deepseek-reasoner"],
+      "enabled": false
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "type": "openai",
+      "api_key": "sk-your-openai-key",
+      "models": ["gpt-5", "gpt-4.1"],
+      "enabled": false
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "type": "openrouter",
+      "api_key": "sk-or-your-key",
+      "models": ["anthropic/claude-sonnet-4", "openai/gpt-4.1"],
+      "enabled": false
+    },
+    {
+      "id": "moonshot",
+      "name": "Moonshot",
+      "type": "moonshot",
+      "api_key": "sk-your-moonshot-key",
+      "models": ["kimi-k2.5"],
+      "enabled": false
+    },
+    {
+      "id": "siliconflow",
+      "name": "SiliconFlow",
+      "type": "siliconflow",
+      "api_key": "sk-your-siliconflow-key",
+      "models": ["deepseek-ai/DeepSeek-V3"],
+      "enabled": false
+    },
+    {
+      "id": "my-gateway",
+      "name": "中转站",
+      "type": "new_api",
+      "base_url": "https://your-gateway.example.com",
+      "access_token": "your-new-api-access-token",
+      "models": ["claude-sonnet-4", "mimo-v2.5-pro"],
+      "enabled": false
+    },
+    {
+      "id": "manual-demo",
+      "name": "手动余额",
+      "type": "manual",
+      "amount": 12.5,
+      "currency": "USD",
+      "models": ["local-model"],
+      "enabled": false,
+      "note": "user-maintained"
+    }
+  ]
+}

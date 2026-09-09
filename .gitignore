@@ -1,0 +1,19 @@
+# secrets / local runtime
+config.json
+balances.json
+hud.pid
+hud.log
+*.local.json
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

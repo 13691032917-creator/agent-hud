@@ -1,0 +1,4 @@
+{
+  "displayName": "Agent HUD Floating Monitor",
+  "brief": "Always-on-top draggable HUD showing turns, steps, cache hit rate, context usage, and multi-platform model balances"
+}
