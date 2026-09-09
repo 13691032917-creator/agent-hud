@@ -125,9 +125,9 @@ python "$SKILL/scripts/collect.py" --scan --list --daily
    - 解析平台，选上面的启动命令执行。
    - 提示用户：窗口默认置顶，可拖拽；右键菜单可刷新、改透明度、切换会话、退出。
 2. 若用户要配置余额：
-   - 打开/创建 `%LOCALAPPDATA%\agent-hud\config.json`
-   - 只启用需要的 provider（`enabled: true`），填入 API Key
-   - 运行 `collect.py --balances`
+   - **优先**：在浮窗顶栏点 **API**（或右键 →「API / 余额源配置…」）在窗口内填写并保存
+   - 也可手动编辑 `%LOCALAPPDATA%\agent-hud\config.json`，把 provider `enabled: true` 并填 Key
+   - 保存后 HUD 会自动 `collect.py --balances`
 
 ### Step 2 — 建立当前会话上报
 

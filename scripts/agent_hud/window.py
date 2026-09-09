@@ -10,7 +10,17 @@ from .balances import load_balances, match_balance_for_model, refresh_balances
 from .config import load_config
 from .daily import get_daily_summary
 from .ids import truncate
-from .paths import is_windows
+from .paths import config_path, is_windows
+from .settings import (
+    PROVIDER_TYPES,
+    blank_provider,
+    models_to_text,
+    normalize_provider,
+    remove_provider,
+    save_providers,
+    text_to_models,
+    upsert_provider,
+)
 from .store import SessionState, clear_stale, list_states
 
 ACCENT = "#3DDC97"
@@ -135,6 +145,18 @@ class HudApp:
             anchor="w",
         )
         self.title_lbl.pack(side="left", fill="both", expand=True)
+
+        self.api_btn = tk.Label(
+            self.top,
+            text="API",
+            bg=PANEL2,
+            fg=INFO,
+            font=self.font_small,
+            cursor="hand2",
+            padx=8,
+        )
+        self.api_btn.pack(side="right", padx=2)
+        self.api_btn.bind("<Button-1>", lambda e: self.open_settings())
 
         self.pin_btn = tk.Label(
             self.top,
@@ -328,6 +350,7 @@ class HudApp:
 
     def _menu(self) -> None:
         menu = tk.Menu(self.root, tearoff=0, bg=PANEL2, fg=TEXT, activebackground=ACCENT_DIM)
+        menu.add_command(label="API / 余额源配置…", command=self.open_settings)
         menu.add_command(label="刷新状态", command=self._tick_now)
         menu.add_command(label="立即拉取余额", command=self._refresh_balances_now)
         menu.add_command(label="清理过期会话", command=self._clear_stale)
@@ -374,6 +397,16 @@ class HudApp:
     def _clear_stale(self) -> None:
         n = clear_stale()
         self._status.set(f"已清理 {n} 个过期会话文件")
+        self._tick_now()
+
+    def open_settings(self) -> None:
+        SettingsDialog(self.root, on_saved=self._on_settings_saved)
+
+    def _on_settings_saved(self) -> None:
+        self.cfg = load_config()
+        self._bal_items = load_balances()
+        self._status.set(f"配置已保存 · {config_path().name}")
+        self._refresh_balances_now()
         self._tick_now()
 
     def _refresh_balances_now(self) -> None:
@@ -528,6 +561,313 @@ class HudApp:
         except tk.TclError:
             pass
         self.root.mainloop()
+
+
+class SettingsDialog:
+    """Floating form for balance providers / API keys (writes config.json)."""
+
+    def __init__(self, master: tk.Misc, on_saved=None) -> None:
+        self.master = master
+        self.on_saved = on_saved
+        self.cfg = load_config()
+        self.providers = [normalize_provider(p) for p in (self.cfg.get("providers") or []) if isinstance(p, dict)]
+        if not self.providers:
+            self.providers = [blank_provider()]
+
+        self.win = tk.Toplevel(master)
+        self.win.title("Agent HUD · API 配置")
+        self.win.configure(bg=BG)
+        self.win.geometry("460x520+220+160")
+        self.win.minsize(420, 460)
+        self.win.transient(master)
+        self.win.grab_set()
+        try:
+            self.win.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+
+        family = "Microsoft YaHei UI" if is_windows() else "Segoe UI"
+        self.f_ui = tkfont.Font(family=family, size=10)
+        self.f_sm = tkfont.Font(family=family, size=9)
+        self.f_m = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=9)
+
+        self._selected = 0
+        self._build()
+        self._load_into_form(self.providers[0])
+
+    def _build(self) -> None:
+        root = tk.Frame(self.win, bg=BG)
+        root.pack(fill="both", expand=True, padx=12, pady=10)
+
+        tk.Label(
+            root,
+            text="余额 / API Key 配置",
+            bg=BG,
+            fg=TEXT,
+            font=self.f_ui,
+            anchor="w",
+        ).pack(fill="x")
+        tk.Label(
+            root,
+            text=f"保存到 {config_path()}（仅本机，勿提交 Git）",
+            bg=BG,
+            fg=MUTED,
+            font=self.f_sm,
+            anchor="w",
+        ).pack(fill="x", pady=(2, 8))
+
+        mid = tk.Frame(root, bg=BG)
+        mid.pack(fill="both", expand=True)
+
+        left = tk.Frame(mid, bg=BG, width=140)
+        left.pack(side="left", fill="y", padx=(0, 10))
+        left.pack_propagate(False)
+        tk.Label(left, text="来源列表", bg=BG, fg=MUTED, font=self.f_sm, anchor="w").pack(fill="x")
+        self.listbox = tk.Listbox(
+            left,
+            bg=PANEL,
+            fg=TEXT,
+            selectbackground=ACCENT_DIM,
+            selectforeground=TEXT,
+            font=self.f_sm,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            exportselection=False,
+        )
+        self.listbox.pack(fill="both", expand=True, pady=(4, 6))
+        self.listbox.bind("<<ListboxSelect>>", lambda e: self._on_select())
+        self._refresh_list()
+
+        btns = tk.Frame(left, bg=BG)
+        btns.pack(fill="x")
+        for text, cmd in (
+            ("新建", self._add),
+            ("删除", self._delete),
+            ("复制", self._duplicate),
+        ):
+            tk.Button(
+                btns,
+                text=text,
+                command=cmd,
+                bg=PANEL2,
+                fg=TEXT,
+                activebackground=ACCENT_DIM,
+                relief="flat",
+                font=self.f_sm,
+                padx=8,
+                pady=2,
+            ).pack(side="left", padx=(0, 4))
+
+        right = tk.Frame(mid, bg=BG)
+        right.pack(side="left", fill="both", expand=True)
+
+        self.vars = {
+            "id": tk.StringVar(),
+            "name": tk.StringVar(),
+            "type": tk.StringVar(value="deepseek"),
+            "api_key": tk.StringVar(),
+            "access_token": tk.StringVar(),
+            "base_url": tk.StringVar(),
+            "models": tk.StringVar(),
+            "currency": tk.StringVar(value="USD"),
+            "amount": tk.StringVar(),
+            "note": tk.StringVar(),
+            "enabled": tk.BooleanVar(value=True),
+        }
+
+        def field(label: str, key: str, show: str | None = None, width: int = 28) -> None:
+            row = tk.Frame(right, bg=BG)
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=label, bg=BG, fg=MUTED, font=self.f_sm, width=10, anchor="w").pack(
+                side="left"
+            )
+            ent = tk.Entry(
+                row,
+                textvariable=self.vars[key],
+                show=show or "",
+                bg=PANEL,
+                fg=TEXT,
+                insertbackground=TEXT,
+                font=self.f_m,
+                relief="flat",
+                width=width,
+            )
+            ent.pack(side="left", fill="x", expand=True, ipady=3)
+
+        field("ID", "id")
+        field("名称", "name")
+        row = tk.Frame(right, bg=BG)
+        row.pack(fill="x", pady=2)
+        tk.Label(row, text="类型", bg=BG, fg=MUTED, font=self.f_sm, width=10, anchor="w").pack(side="left")
+        self.type_box = tk.OptionMenu(
+            row,
+            self.vars["type"],
+            *[t for t, _ in PROVIDER_TYPES],
+        )
+        self.type_box.config(
+            bg=PANEL, fg=TEXT, highlightthickness=0, relief="flat", font=self.f_sm, width=20
+        )
+        self.type_box.pack(side="left", fill="x", expand=True)
+
+        field("API Key", "api_key", show="•")
+        field("Access Token", "access_token", show="•")
+        field("Base URL", "base_url")
+        field("Models", "models")
+        field("货币", "currency", width=8)
+        field("余额(手动)", "amount")
+        field("备注", "note")
+
+        self.enabled_chk = tk.Checkbutton(
+            right,
+            text="启用此来源",
+            variable=self.vars["enabled"],
+            bg=BG,
+            fg=TEXT,
+            selectcolor=PANEL,
+            activebackground=BG,
+            activeforeground=TEXT,
+            font=self.f_sm,
+            anchor="w",
+        )
+        self.enabled_chk.pack(fill="x", pady=(4, 0))
+
+        foot = tk.Frame(root, bg=BG)
+        foot.pack(fill="x", pady=(10, 0))
+        tk.Label(
+            foot,
+            text="中转站常用 type=new_api + access_token；DeepSeek 用 type=deepseek + api_key",
+            bg=BG,
+            fg=MUTED,
+            font=self.f_sm,
+            wraplength=420,
+            justify="left",
+        ).pack(side="left", fill="x", expand=True)
+
+        tk.Button(
+            foot,
+            text="保存",
+            command=self._save,
+            bg=ACCENT_DIM,
+            fg=TEXT,
+            activebackground=ACCENT,
+            relief="flat",
+            font=self.f_ui,
+            padx=16,
+            pady=4,
+        ).pack(side="right")
+        tk.Button(
+            foot,
+            text="取消",
+            command=self.win.destroy,
+            bg=PANEL2,
+            fg=MUTED,
+            relief="flat",
+            font=self.f_sm,
+            padx=10,
+            pady=4,
+        ).pack(side="right", padx=(0, 6))
+
+    def _refresh_list(self) -> None:
+        self.listbox.delete(0, "end")
+        for p in self.providers:
+            mark = "●" if p.get("enabled") else "○"
+            label = f"{mark} {p.get('name') or p.get('id') or '(未命名)'}"
+            self.listbox.insert("end", label)
+        if self.providers:
+            self.listbox.selection_clear(0, "end")
+            self.listbox.selection_set(min(self._selected, len(self.providers) - 1))
+
+    def _on_select(self) -> None:
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        self._selected = int(sel[0])
+        self._load_into_form(self.providers[self._selected])
+
+    def _load_into_form(self, p: dict) -> None:
+        p = normalize_provider(p)
+        self.vars["id"].set(p.get("id") or "")
+        self.vars["name"].set(p.get("name") or "")
+        self.vars["type"].set(p.get("type") or "deepseek")
+        self.vars["api_key"].set(p.get("api_key") or "")
+        self.vars["access_token"].set(p.get("access_token") or "")
+        self.vars["base_url"].set(p.get("base_url") or "")
+        self.vars["models"].set(models_to_text(p.get("models")))
+        self.vars["currency"].set(p.get("currency") or "USD")
+        amt = p.get("amount")
+        self.vars["amount"].set("" if amt is None else str(amt))
+        self.vars["note"].set(p.get("note") or "")
+        self.vars["enabled"].set(bool(p.get("enabled", True)))
+
+    def _form_to_provider(self) -> dict:
+        amount_raw = self.vars["amount"].get().strip()
+        amount = None
+        if amount_raw:
+            try:
+                amount = float(amount_raw)
+            except ValueError:
+                amount = None
+        return normalize_provider(
+            {
+                "id": self.vars["id"].get().strip(),
+                "name": self.vars["name"].get().strip(),
+                "type": self.vars["type"].get().strip(),
+                "api_key": self.vars["api_key"].get().strip(),
+                "access_token": self.vars["access_token"].get().strip(),
+                "base_url": self.vars["base_url"].get().strip(),
+                "models": text_to_models(self.vars["models"].get()),
+                "currency": self.vars["currency"].get().strip() or "USD",
+                "amount": amount,
+                "note": self.vars["note"].get().strip(),
+                "enabled": bool(self.vars["enabled"].get()),
+            }
+        )
+
+    def _add(self) -> None:
+        self.providers.append(blank_provider())
+        self._selected = len(self.providers) - 1
+        self._refresh_list()
+        self._load_into_form(self.providers[-1])
+
+    def _delete(self) -> None:
+        if not self.providers:
+            return
+        pid = self.providers[self._selected].get("id")
+        self.providers.pop(self._selected)
+        if not self.providers:
+            self.providers = [blank_provider()]
+        self._selected = max(0, min(self._selected, len(self.providers) - 1))
+        self._refresh_list()
+        self._load_into_form(self.providers[self._selected])
+        # if deleting a saved id, also drop from disk immediately on save only
+        _ = pid
+
+    def _duplicate(self) -> None:
+        cur = self._form_to_provider()
+        cur = normalize_provider({**cur, "id": "", "name": (cur.get("name") or "provider") + "-copy"})
+        self.providers.append(cur)
+        self._selected = len(self.providers) - 1
+        self._refresh_list()
+        self._load_into_form(cur)
+
+    def _save(self) -> None:
+        self.providers[self._selected] = self._form_to_provider()
+        cleaned = [p for p in self.providers if p.get("id") or p.get("name") or p.get("api_key")]
+        save_providers(self.cfg, cleaned)
+        self.cfg = load_config()
+        self.providers = [normalize_provider(p) for p in (self.cfg.get("providers") or []) if isinstance(p, dict)]
+        if not self.providers:
+            self.providers = [blank_provider()]
+        self._selected = 0
+        self._refresh_list()
+        self._load_into_form(self.providers[0])
+        if self.on_saved:
+            try:
+                self.on_saved()
+            except Exception:
+                pass
+        self.win.destroy()
 
 
 def run_window() -> int:
