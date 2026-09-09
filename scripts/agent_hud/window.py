@@ -136,11 +136,11 @@ class ApiSimpleDialog:
         self._busy = False
 
         self.win = tk.Toplevel(master)
-        self.win.title("填写 API Key · 查余额")
+        self.win.title("Agent HUD · 填写 API Key")
         self.win.configure(bg=BG)
-        self.win.geometry("460x420+160+120")
-        self.win.minsize(380, 360)
-        self.win.resizable(True, True)  # free resize via system borders
+        self.win.geometry("480x460+160+120")
+        self.win.minsize(420, 420)
+        self.win.resizable(True, True)
         try:
             self.win.transient(master.winfo_toplevel())
         except tk.TclError:
@@ -155,29 +155,52 @@ class ApiSimpleDialog:
         self.fs = tkfont.Font(family=family, size=10)
         self.fm = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=11)
 
-        self.win.rowconfigure(0, weight=1)
-        self.win.columnconfigure(0, weight=1)
+        outer = tk.Frame(self.win, bg=BG)
+        outer.pack(fill="both", expand=True)
 
-        form = tk.Frame(self.win, bg=BG)
-        form.grid(row=0, column=0, sticky="nsew", padx=12, pady=10)
+        # form area (top)
+        form = tk.Frame(outer, bg=BG)
+        form.pack(fill="both", expand=True, padx=16, pady=(16, 8))
         form.columnconfigure(1, weight=1)
-        for r in range(8):
-            form.rowconfigure(r, weight=0)
-        form.rowconfigure(7, weight=1)  # spacer
 
-        tk.Label(form, text="选平台，粘贴 API Key", bg=BG, fg=TEXT, font=self.f, anchor="w").grid(
-            row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8)
+        def label(r: int, text: str) -> None:
+            tk.Label(form, text=text, bg=BG, fg=MUTED, font=self.fs, anchor="w").grid(
+                row=r, column=0, sticky="w", padx=(0, 10), pady=6
+            )
+
+        def entry(r: int, var, show=None) -> tk.Entry:
+            e = tk.Entry(
+                form,
+                textvariable=var,
+                show=show or "",
+                bg="#1E2A3A",
+                fg=TEXT,
+                insertbackground=TEXT,
+                font=self.fm,
+                relief="solid",
+                bd=1,
+            )
+            e.grid(row=r, column=1, sticky="ew", pady=6, ipady=5)
+            return e
+
+        tk.Label(form, text="选平台 → 粘贴 Key → 保存", bg=BG, fg=TEXT, font=self.f, anchor="w").grid(
+            row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10)
         )
 
-        tk.Label(form, text="平台", bg=BG, fg=MUTED, font=self.fs, anchor="w").grid(
-            row=1, column=0, sticky="w", pady=4, padx=(0, 8)
-        )
+        label(1, "平台")
         self.preset_var = tk.StringVar(value=PRESETS[0]["label"])
         self.preset_box = tk.OptionMenu(form, self.preset_var, *[p["label"] for p in PRESETS])
         self.preset_box.config(
-            bg=PANEL, fg=TEXT, highlightthickness=0, relief="flat", font=self.fs, pady=2, anchor="w"
+            bg="#1E2A3A",
+            fg=TEXT,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            relief="flat",
+            font=self.fs,
+            anchor="w",
+            pady=4,
         )
-        self.preset_box.grid(row=1, column=1, sticky="ew", pady=4)
+        self.preset_box.grid(row=1, column=1, sticky="ew", pady=6)
         self.preset_var.trace_add("write", lambda *_: self._apply_preset_fields())
 
         self.key_var = tk.StringVar()
@@ -185,59 +208,38 @@ class ApiSimpleDialog:
         self.models_var = tk.StringVar()
         self.cur_var = tk.StringVar(value="CNY")
 
-        tk.Label(form, text="API Key", bg=BG, fg=MUTED, font=self.fs, anchor="w").grid(
-            row=2, column=0, sticky="w", pady=4, padx=(0, 8)
-        )
-        self.key_entry = tk.Entry(
-            form,
-            textvariable=self.key_var,
-            show="•",
-            bg=PANEL,
-            fg=TEXT,
-            insertbackground=TEXT,
-            font=self.fm,
-            relief="flat",
-        )
-        self.key_entry.grid(row=2, column=1, sticky="ew", pady=4, ipady=4)
+        label(2, "API Key")
+        self.key_entry = entry(2, self.key_var, show="•")
 
-        tk.Label(form, text="Base URL", bg=BG, fg=MUTED, font=self.fs, anchor="w").grid(
-            row=3, column=0, sticky="w", pady=4, padx=(0, 8)
-        )
-        self.url_entry = tk.Entry(
-            form,
-            textvariable=self.url_var,
-            bg=PANEL,
-            fg=TEXT,
-            insertbackground=TEXT,
-            font=self.fm,
-            relief="flat",
-        )
-        self.url_entry.grid(row=3, column=1, sticky="ew", pady=4, ipady=4)
+        label(3, "Base URL")
+        self.url_entry = entry(3, self.url_var)
 
-        tk.Label(form, text="货币", bg=BG, fg=MUTED, font=self.fs, anchor="w").grid(
-            row=4, column=0, sticky="w", pady=4, padx=(0, 8)
-        )
-        tk.Entry(
+        label(4, "货币")
+        cur_e = tk.Entry(
             form,
             textvariable=self.cur_var,
-            bg=PANEL,
+            bg="#1E2A3A",
             fg=TEXT,
             insertbackground=TEXT,
             font=self.fm,
-            relief="flat",
-            width=8,
-        ).grid(row=4, column=1, sticky="w", pady=4, ipady=4)
-
-        # bottom bar
-        foot = tk.Frame(self.win, bg=PANEL2)
-        foot.grid(row=1, column=0, sticky="ew")
-        foot.columnconfigure(0, weight=1)
-        self.hint = tk.Label(
-            foot, text="", bg=PANEL2, fg=MUTED, font=self.fs, anchor="w", wraplength=420
+            relief="solid",
+            bd=1,
+            width=10,
         )
-        self.hint.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
+        cur_e.grid(row=4, column=1, sticky="w", pady=6, ipady=5)
+
+        # force minimum content height so fields never collapse
+        tk.Frame(form, height=8).grid(row=5, column=0, columnspan=2)
+
+        # footer
+        foot = tk.Frame(outer, bg=PANEL2)
+        foot.pack(fill="x", side="bottom")
+        self.hint = tk.Label(
+            foot, text="填 Key 后点保存", bg=PANEL2, fg=MUTED, font=self.fs, anchor="w", wraplength=440
+        )
+        self.hint.pack(fill="x", padx=14, pady=(10, 2))
         btn_row = tk.Frame(foot, bg=PANEL2)
-        btn_row.grid(row=1, column=0, sticky="e", padx=12, pady=(2, 10))
+        btn_row.pack(fill="x", padx=14, pady=(2, 12))
         tk.Button(
             btn_row,
             text="取消",
@@ -246,9 +248,9 @@ class ApiSimpleDialog:
             fg=MUTED,
             relief="flat",
             font=self.fs,
-            padx=12,
-            pady=4,
-        ).pack(side="right", padx=(8, 0))
+            padx=14,
+            pady=5,
+        ).pack(side="right", padx=(10, 0))
         self.save_btn = tk.Button(
             btn_row,
             text="保存并查余额",
@@ -258,15 +260,13 @@ class ApiSimpleDialog:
             activebackground=ACCENT,
             relief="flat",
             font=self.f,
-            padx=14,
-            pady=4,
+            padx=16,
+            pady=5,
         )
         self.save_btn.pack(side="right")
 
-        self.win.rowconfigure(0, weight=1)
         self._apply_preset_fields()
-        self.hint.config(text="填 Key 后点「保存并查余额」")
-        self.win.after(80, self.key_entry.focus_set)
+        self.win.after(100, self.key_entry.focus_set)
 
     def _apply_preset_fields(self) -> None:
         label = self.preset_var.get()
