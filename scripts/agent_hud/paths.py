@@ -31,6 +31,10 @@ def balances_path() -> Path:
     return data_dir() / "balances.json"
 
 
+def daily_path() -> Path:
+    return data_dir() / "daily.json"
+
+
 def pid_path() -> Path:
     return data_dir() / "hud.pid"
 

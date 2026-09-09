@@ -1,6 +1,6 @@
 ---
 name: agent-hud
-description: 启动并维护可悬挂在 agent 页面旁的自由拖拽浮窗 HUD，展示当前模型的轮次、步数、缓存命中率、上下文用量，以及当前/其他模型在各 AI 平台的余额。Use when the user says 打开 HUD、悬浮窗、监控窗、显示余额、上下文用量、缓存命中率、floating window、agent monitor、show model balance。Works with MiMo Desktop、Claude Code、Codex、Trae、WorkBuddy、DeepSeekHarness via a shared report CLI and optional log adapters. Do NOT use for unrelated UI design or general status questions without starting the HUD workflow.
+description: 启动并维护可悬挂在 agent 页面旁的自由拖拽浮窗 HUD，展示当前模型的轮次、步数、缓存命中率、上下文用量、今日 Token 用量，以及当前/其他模型在各 AI 平台的余额。Use when the user says 打开 HUD、悬浮窗、监控窗、显示余额、上下文用量、缓存命中率、今日 token、today tokens、token 用量、floating window、agent monitor、show model balance。Works with MiMo Desktop、Claude Code、Codex、Trae、WorkBuddy、DeepSeekHarness via a shared report CLI and optional log adapters. Do NOT use for unrelated UI design or general status questions without starting the HUD workflow.
 ---
 
 # Agent HUD
@@ -9,8 +9,9 @@ description: 启动并维护可悬挂在 agent 页面旁的自由拖拽浮窗 HU
 
 ## 能力
 
-- 置顶、可拖拽、右键菜单的小窗（默认 300×460）
-- 每个会话显示：模型、轮次、步数、缓存命中率、上下文用量/上限、状态
+- 置顶、可拖拽、右键菜单的小窗（默认 300×500）
+- 每个会话显示：模型、轮次、步数、缓存命中率、上下文用量/上限、今日 Token、状态
+- 全局「今日 Token」跨会话累计（本地日期跨零点自动重置）
 - 按模型匹配余额；并列出其他平台/模型余额
 - 任意 agent 通过 `report.py` 自上报；本地日志 adapter 做兜底扫描
 
@@ -59,6 +60,10 @@ python "$SKILL/scripts/report.py" \
   --turn 12 \
   --step 45 \
   --cache-hit-rate 0.72 \
+  --cache-read-tokens 12000 \
+  --cache-write-tokens 1500 \
+  --input-tokens 3000 \
+  --output-tokens 400 \
   --context-used 45000 \
   --context-limit 200000 \
   --status working
@@ -73,11 +78,43 @@ python "$SKILL/scripts/report.py" \
 - `--status`: `working` | `idle` | `error`
 - `--balance`: 可选，临时覆盖当前模型余额展示
 
+### 今日 Token 上报
+
+今日 Token 存在 `%LOCALAPPDATA%\agent-hud\daily.json`（Unix: `~/.local/share/agent-hud/daily.json`），按本地日期跨零点自动清零。
+
+任选一种写法（不要在同一命令里混用多种增量语义，除非你清楚结果）：
+
+```bash
+# A. 增量：本回合新消耗 N token
+python report.py --agent mimo --session "$SID" --add-tokens 1500
+
+# B. 绝对值：该会话今天累计用了 N token
+python report.py --agent mimo --session "$SID" --tokens-today 28000
+
+# C. 会话累计（推荐，能自动算正增量）：input+output+cache 的会话累计值
+python report.py --agent mimo --session "$SID" \
+  --session-total-tokens 52000 \
+  --input-tokens 3000 --output-tokens 400 \
+  --cache-read-tokens 12000 --cache-write-tokens 1500
+
+# 仅传 usage 快照时，也会把 input+output+cache_read+cache_write 之和当作 session_total 处理
+```
+
+查看 / 重置：
+
+```bash
+python report.py --agent mimo --show-daily
+python report.py --agent mimo --reset-daily   # 清空今日全部计数
+python collect.py --daily
+```
+
+浮窗展示：摘要行「今日 xxx」为全局合计；指标「今日Token」为 `本会话今日 / 全局今日 · 会话累计`。
+
 ### 拉余额 / 扫描
 
 ```bash
 python "$SKILL/scripts/collect.py" --balances
-python "$SKILL/scripts/collect.py" --scan --list
+python "$SKILL/scripts/collect.py" --scan --list --daily
 ```
 
 ## Instructions
@@ -101,6 +138,7 @@ python "$SKILL/scripts/collect.py" --scan --list
    - 每次用户回合结束
    - 长任务每完成一个主要步骤
    - 用户问「上下文还剩多少 / 花了多少」时，把已知 token 写入 `--context-used` / `--context-limit`
+   - 每次能拿到 usage 时更新 token 字段（见「今日 Token 上报」），保证今日计数增长
    - 模型切换时立刻更新 `--model`
 
 ### Step 3 — 按平台补齐数据
@@ -169,9 +207,9 @@ python report.py --agent deepseek-harness --session "$SESSION" --model deepseek-
 **用户：打开 HUD，把当前对话的上下文和模型余额挂上去**
 
 1. 启动 `start_hud.py`
-2. `report.py --agent mimo --session <id> --model <model> --status working`
+2. `report.py --agent mimo --session <id> --model <model> --status working --add-tokens 0`
 3. 若已配 provider，`collect.py --balances`
-4. 告知：拖动标题栏移动，右键打开菜单
+4. 告知：拖动标题栏移动，右键打开菜单；今日 Token 在摘要与指标区可见
 
 **用户：我换了 deepseek，余额也显示一下**
 
@@ -191,6 +229,8 @@ python report.py --agent deepseek-harness --session "$SESSION" --model deepseek-
 | 浮窗没弹出 | 被单实例挡住或 Tk 不可用 | 查 `%LOCALAPPDATA%\agent-hud\hud.pid`；换 `MIMO_PYTHON` 再启 |
 | 会话不显示 | 超过 `session_max_age_sec` | 重新 `report.py`；右键清理后重报 |
 | 缓存命中率是 — | 只有 turn/step 没有 token | 补 `--cache-read-tokens` 等，或跑 `--scan` |
+| 今日 Token 不涨 | 只报了 turn/step，没有 usage 或 `--add-tokens` | 每回合带 usage 或 `--add-tokens`/`--tokens-today` |
+| 今日 Token 虚高 | 把每次请求的 cumulative 又当成增量相加 | 用 `--session-total-tokens` 或 usage 快照，不要对 cumulative 反复 `--add-tokens` |
 | 余额全是 — | provider 未启用 / Key 无效 / 接口不匹配 | 读 `raw_note`；改用 `type: manual` 手动填 |
 | 中转站余额数量级怪 | new-api quota 以 500000 = $1 计 | 确认用的是 `access_token`；必要时改 `manual` |
 | 想换数据目录 | — | 设 `AGENT_HUD_CONFIG` 指向自定义 config.json |
@@ -204,5 +244,6 @@ python report.py --agent deepseek-harness --session "$SESSION" --model deepseek-
 ## 参考
 
 - 状态协议：`references/state-protocol.md`
+- 今日 Token：`daily.json` + `report.py --add-tokens / --tokens-today / --session-total-tokens`
 - 平台适配：`references/platforms.md`
 - 余额 provider：`references/balance-providers.md`

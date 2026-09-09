@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import time
 import tkinter as tk
 from tkinter import font as tkfont
-from typing import Any
 
 from .balances import load_balances, match_balance_for_model, refresh_balances
 from .config import load_config
+from .daily import get_daily_summary
+from .ids import truncate
 from .paths import is_windows
 from .store import SessionState, clear_stale, list_states
 
@@ -24,6 +24,7 @@ WARN = "#F5A524"
 DANGER = "#F31260"
 INFO = "#5B9DFF"
 BORDER = "#243044"
+CHIP_BG = "#1E2A3A"
 
 
 def _fmt_tokens(n: int | None) -> str:
@@ -33,7 +34,7 @@ def _fmt_tokens(n: int | None) -> str:
         return f"{n/1_000_000:.2f}M"
     if n >= 1_000:
         return f"{n/1_000:.1f}k"
-    return str(n)
+    return str(int(n))
 
 
 def _fmt_pct(rate: float | None) -> str:
@@ -45,7 +46,7 @@ def _fmt_pct(rate: float | None) -> str:
 def _fmt_money(amount: float | None, currency: str) -> str:
     if amount is None:
         return "—"
-    sym = {"USD": "$", "CNY": "¥", "RMB": "¥", "EUR": "€"}.get(currency.upper(), "")
+    sym = {"USD": "$", "CNY": "¥", "RMB": "¥", "EUR": "€"}.get((currency or "USD").upper(), "")
     return f"{sym}{amount:,.2f}"
 
 
@@ -55,8 +56,8 @@ class HudApp:
         self.root = tk.Tk()
         self.root.title("Agent HUD")
         self.root.configure(bg=BG)
-        self.root.geometry("300x460+120+120")
-        self.root.minsize(260, 320)
+        self.root.geometry("320x560+120+120")
+        self.root.minsize(280, 380)
         self.root.attributes("-topmost", bool(self.cfg.get("always_on_top", True)))
         try:
             self.root.attributes("-alpha", float(self.cfg.get("opacity", 0.96)))
@@ -73,13 +74,16 @@ class HudApp:
         self.font_ui = tkfont.Font(family=family, size=10)
         self.font_small = tkfont.Font(family=family, size=9)
         self.font_title = tkfont.Font(family=family, size=11, weight="bold")
-        self.font_mono = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=10)
+        self.font_mono = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=9)
 
         self._drag = {"x": 0, "y": 0}
         self._selected = 0
+        self._states: list[SessionState] = []
         self._bal_items = load_balances()
+        self._daily = get_daily_summary()
         self._status = tk.StringVar(value="就绪")
         self._thread_stop = threading.Event()
+        self._chip_btns: list[tk.Label] = []
 
         self._build_chrome()
         self._build_body()
@@ -90,19 +94,19 @@ class HudApp:
         self._start_bg()
 
     def _build_chrome(self) -> None:
-        self.top = tk.Frame(self.root, bg=PANEL2, height=36)
+        self.top = tk.Frame(self.root, bg=PANEL2, height=34)
         self.top.pack(fill="x", side="top")
         self.top.pack_propagate(False)
 
         self.title_lbl = tk.Label(
             self.top,
-            text="Agent HUD",
+            text="  Agent HUD",
             bg=PANEL2,
             fg=TEXT,
             font=self.font_title,
             anchor="w",
         )
-        self.title_lbl.pack(side="left", padx=(12, 0), fill="x", expand=True)
+        self.title_lbl.pack(side="left", fill="both", expand=True)
 
         self.pin_btn = tk.Label(
             self.top,
@@ -111,19 +115,19 @@ class HudApp:
             fg=ACCENT if self.cfg.get("always_on_top", True) else MUTED,
             font=self.font_small,
             cursor="hand2",
-            padx=8,
+            padx=6,
         )
-        self.pin_btn.pack(side="right", padx=4)
+        self.pin_btn.pack(side="right", padx=2)
         self.pin_btn.bind("<Button-1>", lambda e: self._toggle_pin())
 
         self.close_btn = tk.Label(
             self.top,
-            text="×",
+            text=" × ",
             bg=PANEL2,
             fg=MUTED,
             font=self.font_title,
             cursor="hand2",
-            padx=8,
+            padx=6,
         )
         self.close_btn.pack(side="right")
         self.close_btn.bind("<Button-1>", lambda e: self.quit())
@@ -132,8 +136,12 @@ class HudApp:
         body = tk.Frame(self.root, bg=BG)
         body.pack(fill="both", expand=True)
 
+        # session chips
+        self.chip_bar = tk.Frame(body, bg=BG)
+        self.chip_bar.pack(fill="x", padx=8, pady=(8, 0))
+
         self.summary = tk.Frame(body, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
-        self.summary.pack(fill="x", padx=10, pady=(10, 6))
+        self.summary.pack(fill="x", padx=8, pady=(6, 4))
         self.sum_a = tk.Label(self.summary, bg=PANEL, fg=TEXT, font=self.font_ui, anchor="w")
         self.sum_b = tk.Label(self.summary, bg=PANEL, fg=MUTED, font=self.font_small, anchor="w")
         self.sum_c = tk.Label(self.summary, bg=PANEL, fg=INFO, font=self.font_small, anchor="w")
@@ -142,7 +150,7 @@ class HudApp:
         self.sum_c.pack(fill="x", padx=10, pady=(0, 8))
 
         self.metrics = tk.Frame(body, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
-        self.metrics.pack(fill="x", padx=10, pady=6)
+        self.metrics.pack(fill="x", padx=8, pady=4)
         self.metric_labels: dict[str, tk.Label] = {}
         rows = [
             ("model", "模型"),
@@ -150,6 +158,7 @@ class HudApp:
             ("step", "步数"),
             ("cache", "缓存命中"),
             ("ctx", "上下文"),
+            ("tokens", "今日Token"),
             ("status", "状态"),
         ]
         for i, (key, label) in enumerate(rows):
@@ -160,7 +169,8 @@ class HudApp:
                 fg=MUTED,
                 font=self.font_small,
                 anchor="w",
-            ).grid(row=i, column=0, sticky="w", padx=(12, 8), pady=4)
+                width=8,
+            ).grid(row=i, column=0, sticky="w", padx=(10, 4), pady=3)
             val = tk.Label(
                 self.metrics,
                 text="—",
@@ -169,30 +179,31 @@ class HudApp:
                 font=self.font_mono,
                 anchor="e",
             )
-            val.grid(row=i, column=1, sticky="e", padx=(8, 12), pady=4)
+            val.grid(row=i, column=1, sticky="e", padx=(4, 10), pady=3)
             self.metric_labels[key] = val
         self.metrics.columnconfigure(1, weight=1)
 
         self.bal_title = tk.Label(
-            body, text="余额", bg=BG, fg=MUTED, font=self.font_small, anchor="w"
+            body, text=" 余额", bg=BG, fg=MUTED, font=self.font_small, anchor="w"
         )
-        self.bal_title.pack(fill="x", padx=12)
+        self.bal_title.pack(fill="x", padx=10)
 
         self.bal_panel = tk.Frame(body, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
-        self.bal_panel.pack(fill="both", expand=True, padx=10, pady=(4, 6))
+        self.bal_panel.pack(fill="both", expand=True, padx=8, pady=(2, 4))
         self.bal_list = tk.Text(
             self.bal_panel,
             bg=PANEL,
             fg=TEXT,
             font=self.font_small,
             bd=0,
-            height=10,
+            height=8,
             wrap="word",
             insertbackground=TEXT,
             selectbackground=PANEL2,
             state="disabled",
+            highlightthickness=0,
         )
-        self.bal_list.pack(fill="both", expand=True, padx=6, pady=6)
+        self.bal_list.pack(fill="both", expand=True, padx=4, pady=4)
         self.bal_list.tag_configure("head", foreground=INFO)
         self.bal_list.tag_configure("warn", foreground=WARN)
         self.bal_list.tag_configure("ok", foreground=ACCENT)
@@ -206,10 +217,50 @@ class HudApp:
             font=self.font_small,
             anchor="w",
         )
-        self.status_bar.pack(fill="x", padx=12, pady=(0, 6))
+        self.status_bar.pack(fill="x", padx=10, pady=(0, 6))
+
+    def _rebuild_chips(self, states: list[SessionState]) -> None:
+        for w in self._chip_btns:
+            w.destroy()
+        self._chip_btns.clear()
+        if not states:
+            return
+        for i, st in enumerate(states[:6]):
+            label = f"{truncate(st.agent, 10)}·{truncate(st.session_id, 10)}"
+            active = i == self._selected
+            chip = tk.Label(
+                self.chip_bar,
+                text=label,
+                bg=ACCENT_DIM if active else CHIP_BG,
+                fg=TEXT if active else MUTED,
+                font=self.font_small,
+                padx=6,
+                pady=2,
+                cursor="hand2",
+            )
+            chip.pack(side="left", padx=(0, 4))
+            chip.bind("<Button-1>", lambda e, idx=i: self._select(idx))
+            self._chip_btns.append(chip)
+        if len(states) > 6:
+            more = tk.Label(
+                self.chip_bar,
+                text=f"+{len(states) - 6}",
+                bg=BG,
+                fg=MUTED,
+                font=self.font_small,
+            )
+            more.pack(side="left")
+            self._chip_btns.append(more)
+
+    def _select(self, idx: int) -> None:
+        if not self._states:
+            return
+        self._selected = max(0, min(idx, len(self._states) - 1))
+        self._render(self._states)
 
     def _bind_drag(self) -> None:
-        for widget in (self.top, self.title_lbl, self.summary, self.metrics, self.status_bar):
+        widgets = (self.top, self.title_lbl, self.summary, self.metrics, self.status_bar, self.chip_bar)
+        for widget in widgets:
             widget.bind("<Button-1>", self._drag_start)
             widget.bind("<B1-Motion>", self._drag_move)
 
@@ -256,11 +307,10 @@ class HudApp:
         self.cfg["opacity"] = nxt
 
     def _cycle(self, delta: int) -> None:
-        states = list_states(max_age_sec=float(self.cfg.get("session_max_age_sec", 180)))
-        if not states:
+        if not self._states:
             return
-        self._selected = (self._selected + delta) % len(states)
-        self._render(states)
+        self._selected = (self._selected + delta) % len(self._states)
+        self._render(self._states)
 
     def _clear_stale(self) -> None:
         n = clear_stale()
@@ -291,11 +341,16 @@ class HudApp:
         threading.Thread(target=loop, daemon=True).start()
 
     def _tick_now(self) -> None:
-        self._tick(force=True)
+        self._tick()
 
-    def _tick(self, force: bool = False) -> None:
+    def _tick(self) -> None:
         try:
-            states = list_states(max_age_sec=float(self.cfg.get("session_max_age_sec", 180)))
+            self._daily = get_daily_summary()
+            # longer default age so short-lived agents stay visible
+            age = float(self.cfg.get("session_max_age_sec", 600) or 600)
+            states = list_states(max_age_sec=age)
+            self._states = states
+            self._rebuild_chips(states)
             self._render(states)
             self._render_balances(states)
             self._status.set(time.strftime("%H:%M:%S 更新"))
@@ -305,42 +360,51 @@ class HudApp:
         self.root.after(max(1000, delay), self._tick)
 
     def _render(self, states: list[SessionState]) -> None:
+        day_total = int((self._daily or {}).get("total_tokens") or 0)
         if not states:
             self.sum_a.configure(text="暂无活跃会话")
-            self.sum_b.configure(text="让 agent 调用 report.py 上报，或等待 adapter 扫描")
-            self.sum_c.configure(text="")
+            self.sum_b.configure(text="让 agent 调用 report.py 上报")
+            self.sum_c.configure(text=f"今日全局 {_fmt_tokens(day_total)} tokens")
             for key in self.metric_labels:
                 self.metric_labels[key].configure(text="—", fg=TEXT)
             return
         if self._selected >= len(states):
             self._selected = 0
         st = states[self._selected]
-        self.sum_a.configure(text=f"{st.agent} · {st.session_id[:28]}")
-        self.model = st.model or "—"
+        self.sum_a.configure(text=f"{st.agent} · {truncate(st.session_id, 22)}")
+        model = st.model or "—"
         bal = match_balance_for_model(st.model, self._bal_items)
-        bal_txt = _fmt_money(bal.amount, bal.currency) if bal else _fmt_money(st.balance_usd, st.balance_currency)
-        self.sum_b.configure(text=f"模型 {self.model} · 余额 {bal_txt}")
-        extra = f"会话 {self._selected + 1}/{len(states)}"
-        if bal and bal.raw_note:
-            extra += f" · {bal.raw_note[:24]}"
-        self.sum_c.configure(text=extra)
+        bal_txt = (
+            _fmt_money(bal.amount, bal.currency)
+            if bal
+            else _fmt_money(st.balance_usd, st.balance_currency)
+        )
+        self.sum_b.configure(text=f"{truncate(model, 24)} · 余额 {bal_txt}")
+        self.sum_c.configure(
+            text=f"会话 {self._selected + 1}/{len(states)} · 今日全局 {_fmt_tokens(day_total)}"
+        )
 
-        ctx_txt = "—"
         if st.context_limit and st.context_used:
             pct = st.context_used / st.context_limit * 100
-            ctx_txt = f"{_fmt_tokens(st.context_used)} / {_fmt_tokens(st.context_limit)} ({pct:.1f}%)"
+            ctx_txt = f"{_fmt_tokens(st.context_used)}/{_fmt_tokens(st.context_limit)} ({pct:.0f}%)"
             self.metric_labels["ctx"].configure(fg=WARN if pct >= 80 else TEXT)
         elif st.context_used:
             ctx_txt = _fmt_tokens(st.context_used)
-        self.metric_labels["model"].configure(text=self.model)
+            self.metric_labels["ctx"].configure(fg=TEXT)
+        else:
+            ctx_txt = "—"
+            self.metric_labels["ctx"].configure(fg=TEXT)
+
+        sess_today = int(st.tokens_today or 0)
+        tok_txt = f"{_fmt_tokens(sess_today)} / 全局 {_fmt_tokens(day_total)}"
+        self.metric_labels["model"].configure(text=truncate(model, 26))
         self.metric_labels["turn"].configure(text=str(st.turn))
         self.metric_labels["step"].configure(text=str(st.step))
         self.metric_labels["cache"].configure(text=_fmt_pct(st.cache_hit_rate))
         self.metric_labels["ctx"].configure(text=ctx_txt)
+        self.metric_labels["tokens"].configure(text=tok_txt)
         status_map = {"working": ACCENT, "idle": MUTED, "error": DANGER}
-        self.metric_labels["status"].configure(
-            text=st.status, fg=status_map.get(st.status, TEXT)
-        )
+        self.metric_labels["status"].configure(text=st.status, fg=status_map.get(st.status, TEXT))
 
     def _render_balances(self, states: list[SessionState]) -> None:
         current_model = states[self._selected].model if states else ""
@@ -349,35 +413,31 @@ class HudApp:
         if not self._bal_items:
             self.bal_list.insert(
                 "end",
-                "尚未配置余额源。\n在 config.json 的 providers 中填写 API Key，\n或右键 → 立即拉取余额。\n",
+                "尚未配置余额源。\n在 config.json 启用 provider 并填入 API Key，\n或右键 → 立即拉取余额。\n",
                 "muted",
             )
         else:
             current = match_balance_for_model(current_model, self._bal_items)
             if current:
-                self.bal_list.insert(
-                    "end",
-                    f"当前 · {current.provider_name}\n",
-                    "head",
-                )
+                self.bal_list.insert("end", f"当前 · {current.provider_name}\n", "head")
                 tag = "ok" if current.amount is not None else "warn"
                 self.bal_list.insert(
                     "end",
-                    f"  {current.model}  {_fmt_money(current.amount, current.currency)}\n",
+                    f"  {truncate(current.model, 22)}  {_fmt_money(current.amount, current.currency)}\n",
                     tag,
                 )
                 if current.raw_note:
-                    self.bal_list.insert("end", f"  {current.raw_note}\n", "muted")
+                    self.bal_list.insert("end", f"  {truncate(current.raw_note, 28)}\n", "muted")
             self.bal_list.insert("end", "\n其他余额\n", "head")
             shown = 0
             for item in self._bal_items:
                 if current and item is current:
                     continue
-                line = f"{item.provider_name} · {item.model}  {_fmt_money(item.amount, item.currency)}\n"
+                line = f"{truncate(item.provider_name, 10)} · {truncate(item.model, 16)}  {_fmt_money(item.amount, item.currency)}\n"
                 tag = "ok" if item.amount is not None else "warn"
                 self.bal_list.insert("end", line, tag)
                 shown += 1
-                if shown >= 12:
+                if shown >= 10:
                     break
         self.bal_list.configure(state="disabled")
 
@@ -404,7 +464,6 @@ class HudApp:
 
 
 def run_window() -> int:
-    # On some Windows builds, high-DPI awareness improves layout
     if is_windows():
         try:
             import ctypes

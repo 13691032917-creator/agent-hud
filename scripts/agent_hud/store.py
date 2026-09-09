@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .ids import stable_key
 from .paths import sessions_dir
 
 
@@ -33,6 +34,9 @@ class SessionState:
     balance_usd: float | None = None
     balance_currency: str = "USD"
     note: str = ""
+    tokens_today: int = 0
+    total_tokens: int = 0
+    last_cumulative_tokens: int = 0
     updated_at: str = field(default_factory=_now_iso)
 
     def to_dict(self) -> dict[str, Any]:
@@ -46,9 +50,8 @@ class SessionState:
 
 
 def session_file(agent: str, session_id: str) -> Path:
-    safe_agent = "".join(c if c.isalnum() or c in "-_" else "_" for c in agent)[:40] or "unknown"
-    safe_sid = "".join(c if c.isalnum() or c in "-_." else "_" for c in session_id)[:80] or "default"
-    return sessions_dir() / f"{safe_agent}__{safe_sid}.json"
+    # Hash-based ASCII name: Chinese session titles used to mojibake under some code pages.
+    return sessions_dir() / f"{stable_key(agent, session_id)}.json"
 
 
 def save_state(state: SessionState) -> Path:
@@ -90,6 +93,8 @@ def list_states(max_age_sec: float = 180.0) -> list[SessionState]:
 
 def touch_activity(agent: str, session_id: str, **fields: Any) -> SessionState:
     """Increment-friendly upsert used by adapters / report CLI."""
+    from .daily import record_tokens, today_str
+
     path = session_file(agent, session_id)
     existing = load_state(path) or SessionState(agent=agent, session_id=session_id)
     for key, value in fields.items():
@@ -99,6 +104,42 @@ def touch_activity(agent: str, session_id: str, **fields: Any) -> SessionState:
             setattr(existing, key, value)
     existing.agent = agent
     existing.session_id = session_id
+
+    # Keep daily counters in sync when usage snapshot or token fields change
+    snapshot = int(existing.input_tokens or 0) + int(existing.output_tokens or 0)
+    snapshot += int(existing.cache_read_tokens or 0) + int(existing.cache_write_tokens or 0)
+    explicit_add = fields.get("add_tokens")
+    if explicit_add is not None:
+        summary = record_tokens(
+            agent,
+            session_id,
+            add_tokens=int(explicit_add),
+            model=existing.model,
+        )
+        existing.tokens_today = summary["session_tokens_today"]
+        existing.total_tokens = int(existing.total_tokens or 0) + int(explicit_add)
+        existing.last_cumulative_tokens = int(existing.last_cumulative_tokens or 0) + int(explicit_add)
+    elif snapshot > 0 or fields.get("tokens_today") is not None or fields.get("session_total_tokens") is not None:
+        session_total = fields.get("session_total_tokens")
+        summary = record_tokens(
+            agent,
+            session_id,
+            session_total=int(session_total) if session_total is not None else snapshot,
+            tokens_today=int(fields["tokens_today"]) if fields.get("tokens_today") is not None else None,
+            model=existing.model,
+            input_tokens=existing.input_tokens,
+            output_tokens=existing.output_tokens,
+            cache_read_tokens=existing.cache_read_tokens,
+            cache_write_tokens=existing.cache_write_tokens,
+        )
+        existing.tokens_today = summary["session_tokens_today"]
+        existing.last_cumulative_tokens = max(
+            int(existing.last_cumulative_tokens or 0),
+            int(session_total) if session_total is not None else snapshot,
+        )
+        if existing.total_tokens < existing.tokens_today:
+            existing.total_tokens = existing.tokens_today
+
     save_state(existing)
     return existing
 
