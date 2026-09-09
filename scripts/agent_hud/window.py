@@ -27,8 +27,8 @@ DANGER = "#F31260"
 INFO = "#5B9DFF"
 BORDER = "#243044"
 CHIP_BG = "#1E2A3A"
-CARD_W = 380
-CARD_H = 640
+CARD_W = 400
+CARD_H = 700
 
 # 简化预设：国内平台默认人民币
 PRESETS: list[dict] = [
@@ -125,7 +125,7 @@ def _enable_rounded_corners(widget: tk.Misc) -> None:
 
 
 class ApiSimpleDialog:
-    """只填 API Key 就能查余额的极简配置窗。"""
+    """极简 API 配置：平台 + Key（+ 中转站 URL），固定底部保存按钮。"""
 
     def __init__(self, master: tk.Misc, on_saved: Callable[[], None] | None = None) -> None:
         self.on_saved = on_saved
@@ -136,11 +136,11 @@ class ApiSimpleDialog:
         self._busy = False
 
         self.win = tk.Toplevel(master)
-        self.win.title("填写 API · 查余额")
-        self.win.configure(bg=BG)
-        self.win.geometry("520x560+180+100")
-        self.win.minsize(480, 500)
-        self.win.resizable(True, True)
+        self.win.title("填写 API Key")
+        self.win.configure(bg=BORDER)
+        # fixed compact size — form is short so save is always visible
+        self.win.geometry("420x400+160+120")
+        self.win.resizable(False, False)
         try:
             self.win.transient(master.winfo_toplevel())
         except tk.TclError:
@@ -151,19 +151,24 @@ class ApiSimpleDialog:
             pass
 
         family = "Microsoft YaHei UI" if is_windows() else "Segoe UI"
-        self.f = tkfont.Font(family=family, size=11)
-        self.fs = tkfont.Font(family=family, size=10)
-        self.fm = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=10)
+        self.f = tkfont.Font(family=family, size=12)
+        self.fs = tkfont.Font(family=family, size=11)
+        self.fm = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=11)
 
-        # Footer first so buttons always stay visible
-        foot = tk.Frame(self.win, bg=PANEL2)
+        border = tk.Frame(self.win, bg=BORDER, padx=1, pady=1)
+        border.pack(fill="both", expand=True)
+        card = tk.Frame(border, bg=BG)
+        card.pack(fill="both", expand=True)
+
+        # pack order: bottom footer first, then top chrome, then body fills middle
+        foot = tk.Frame(card, bg=PANEL2)
         foot.pack(fill="x", side="bottom")
         self.hint = tk.Label(
-            foot, text="", bg=PANEL2, fg=MUTED, font=self.fs, anchor="w", wraplength=480, pady=8
+            foot, text="", bg=PANEL2, fg=MUTED, font=self.fs, anchor="w", wraplength=380, pady=6
         )
-        self.hint.pack(fill="x", padx=12, pady=(8, 0))
+        self.hint.pack(fill="x", padx=12)
         btn_row = tk.Frame(foot, bg=PANEL2)
-        btn_row.pack(fill="x", padx=12, pady=10)
+        btn_row.pack(fill="x", padx=12, pady=8)
         tk.Button(
             btn_row,
             text="取消",
@@ -172,8 +177,8 @@ class ApiSimpleDialog:
             fg=MUTED,
             relief="flat",
             font=self.fs,
-            padx=14,
-            pady=6,
+            padx=12,
+            pady=4,
         ).pack(side="right", padx=(8, 0))
         self.save_btn = tk.Button(
             btn_row,
@@ -184,76 +189,93 @@ class ApiSimpleDialog:
             activebackground=ACCENT,
             relief="flat",
             font=self.f,
-            padx=16,
-            pady=6,
+            padx=14,
+            pady=4,
         )
         self.save_btn.pack(side="right")
 
-        body = tk.Frame(self.win, bg=BG)
-        body.pack(fill="both", expand=True, padx=16, pady=12)
-
-        tk.Label(body, text="选择平台，粘贴 API Key", bg=BG, fg=TEXT, font=self.f, anchor="w").pack(
-            fill="x"
+        chrome = tk.Frame(card, bg=PANEL2, height=36)
+        chrome.pack(fill="x", side="top")
+        chrome.pack_propagate(False)
+        tk.Label(chrome, text="  API Key · 余额", bg=PANEL2, fg=TEXT, font=self.f, anchor="w").pack(
+            side="left", fill="both", expand=True
         )
-        tk.Label(
-            body,
-            text="国内平台默认人民币 ¥；点「保存并查余额」后会提示结果",
-            bg=BG,
+        tk.Button(
+            chrome,
+            text="×",
+            command=self.win.destroy,
+            bg=PANEL2,
             fg=MUTED,
-            font=self.fs,
-            anchor="w",
-            wraplength=460,
-            justify="left",
-        ).pack(fill="x", pady=(2, 10))
+            activebackground=DANGER,
+            relief="flat",
+            font=self.f,
+            bd=0,
+            padx=10,
+            takefocus=False,
+        ).pack(side="right", padx=4, pady=4)
+
+        body = tk.Frame(card, bg=BG)
+        body.pack(fill="both", expand=True, padx=14, pady=12)
+
+        tk.Label(body, text="选平台，粘贴 Key，点保存", bg=BG, fg=TEXT, font=self.fs, anchor="w").pack(
+            fill="x", pady=(0, 8)
+        )
 
         self.preset_var = tk.StringVar(value=PRESETS[0]["label"])
-        row = tk.Frame(body, bg=BG)
-        row.pack(fill="x", pady=(0, 10))
-        self.preset_box = tk.OptionMenu(row, self.preset_var, *[p["label"] for p in PRESETS])
+        tk.Label(body, text="平台", bg=BG, fg=MUTED, font=self.fs, anchor="w").pack(fill="x")
+        self.preset_box = tk.OptionMenu(body, self.preset_var, *[p["label"] for p in PRESETS])
         self.preset_box.config(
-            bg=PANEL, fg=TEXT, highlightthickness=0, relief="flat", font=self.fs, pady=6
+            bg=PANEL, fg=TEXT, highlightthickness=0, relief="flat", font=self.fs, pady=4
         )
-        self.preset_box.pack(fill="x")
+        self.preset_box.pack(fill="x", pady=(2, 8))
         self.preset_var.trace_add("write", lambda *_: self._apply_preset_fields())
 
-        self.url_var = tk.StringVar()
         self.key_var = tk.StringVar()
+        self.url_var = tk.StringVar()
         self.models_var = tk.StringVar()
         self.cur_var = tk.StringVar(value="CNY")
 
-        self._field(body, "API Key", self.key_var, show="•")
-        self._field(body, "Base URL（中转站必填）", self.url_var)
-        self._field(body, "Models（可选，逗号分隔）", self.models_var)
-        self._field(body, "货币", self.cur_var)
-
-        self._apply_preset_fields()
-        self.hint.config(text="填好后点右下角「保存并查余额」")
-
-    def _field(self, parent, label, var, show=None) -> None:
-        wrap = tk.Frame(parent, bg=BG)
-        wrap.pack(fill="x", pady=6)
-        tk.Label(wrap, text=label, bg=BG, fg=MUTED, font=self.fs, anchor="w").pack(fill="x")
-        tk.Entry(
-            wrap,
-            textvariable=var,
-            show=show or "",
+        tk.Label(body, text="API Key", bg=BG, fg=MUTED, font=self.fs, anchor="w").pack(fill="x")
+        self.key_entry = tk.Entry(
+            body,
+            textvariable=self.key_var,
+            show="•",
             bg=PANEL,
             fg=TEXT,
             insertbackground=TEXT,
             font=self.fm,
             relief="flat",
-        ).pack(fill="x", ipady=6)
+        )
+        self.key_entry.pack(fill="x", pady=(2, 8), ipady=5)
+
+        tk.Label(body, text="Base URL（仅中转站）", bg=BG, fg=MUTED, font=self.fs, anchor="w").pack(
+            fill="x"
+        )
+        self.url_entry = tk.Entry(
+            body,
+            textvariable=self.url_var,
+            bg=PANEL,
+            fg=TEXT,
+            insertbackground=TEXT,
+            font=self.fm,
+            relief="flat",
+        )
+        self.url_entry.pack(fill="x", pady=(2, 8), ipady=5)
+
+        self._apply_preset_fields()
+        self.hint.config(text="填 Key 后点「保存并查余额」")
+        self.win.after(50, self.key_entry.focus_set)
 
     def _apply_preset_fields(self) -> None:
         label = self.preset_var.get()
         preset = next((p for p in PRESETS if p["label"] == label), PRESETS[0])
         self.cur_var.set(preset.get("currency") or "CNY")
-        if preset.get("base_url"):
-            self.url_var.set(preset["base_url"])
-        elif preset.get("need_url"):
+        if preset.get("need_url"):
             self.url_var.set("")
+            self.url_entry.configure(state="normal")
         else:
             self.url_var.set(preset.get("base_url") or "")
+            self.url_entry.configure(state="normal")
         self.models_var.set(", ".join(preset.get("models") or []))
         existing = next((p for p in self.providers if p.get("id") == preset["id"]), None)
         if existing:
@@ -265,9 +287,9 @@ class ApiSimpleDialog:
                 self.models_var.set(", ".join(existing["models"]))
             self.cur_var.set(existing.get("currency") or preset.get("currency") or "CNY")
         self.hint.config(
-            text="中转站请填 Base URL + access token（部分站用 api_key 即可）"
+            text="中转站：Key + Base URL 都要填"
             if preset.get("need_url")
-            else f"将写入 config · {preset['id']} · 货币 {self.cur_var.get()}"
+            else f"{preset['name']} · 默认 {self.cur_var.get()}"
         )
 
     def _save_and_fetch(self) -> None:
@@ -523,10 +545,13 @@ class HudApp:
             fill="x", padx=10, pady=(6, 0)
         )
 
-        # scrollable balance area so content is always reachable
-        self.bal_wrap = tk.Frame(body, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
-        self.bal_wrap.pack(fill="both", expand=True, padx=8, pady=(2, 4))
-        self.bal_canvas = tk.Canvas(self.bal_wrap, bg=PANEL, bd=0, highlightthickness=0)
+        # Fixed-height scrollable balance area (always visible)
+        self.bal_wrap = tk.Frame(
+            body, bg=PANEL, highlightbackground=BORDER, highlightthickness=1, height=160
+        )
+        self.bal_wrap.pack(fill="x", padx=8, pady=(2, 4))
+        self.bal_wrap.pack_propagate(False)
+        self.bal_canvas = tk.Canvas(self.bal_wrap, bg=PANEL, bd=0, highlightthickness=0, height=150)
         scroll = tk.Scrollbar(self.bal_wrap, orient="vertical", command=self.bal_canvas.yview)
         self.bal_frame = tk.Frame(self.bal_canvas, bg=PANEL)
         self.bal_frame.bind(
