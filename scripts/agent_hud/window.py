@@ -7,11 +7,12 @@ import tkinter as tk
 from tkinter import font as tkfont
 from typing import Callable
 
-from .balances import load_balances, match_balance_for_model, refresh_balances
+from .balances import load_balances, refresh_balances
 from .config import load_config
 from .daily import get_daily_summary
 from .ids import truncate
-from .paths import is_windows
+from .paths import config_path, is_windows
+from .providers_view import build_provider_view
 from .settings import blank_provider, normalize_provider, save_providers
 from .store import SessionState, clear_stale, list_states
 
@@ -477,6 +478,7 @@ class HudApp:
         self._dragging = False
         self._selected = 0
         self._states: list[SessionState] = []
+        self._providers: list[dict] = []
         self._bal_items = load_balances()
         self._daily = get_daily_summary()
         self._status = tk.StringVar(value="拖动顶栏移动 · 点 API 填密钥")
@@ -588,11 +590,11 @@ class HudApp:
         self.metrics.pack(fill="x", padx=8, pady=2)
         self.metric_labels: dict[str, tk.Label] = {}
         rows = [
-            ("model", "模型"),
-            ("turnstep", "轮/步"),
-            ("cache", "缓存"),
-            ("ctx", "上下文"),
-            ("tokens", "今日"),
+            ("model", "厂家"),
+            ("turnstep", "模型数"),
+            ("cache", "余额"),
+            ("ctx", "今日Token"),
+            ("tokens", "占今日"),
             ("status", "状态"),
         ]
         for i, (key, label) in enumerate(rows):
@@ -635,7 +637,7 @@ class HudApp:
 
         self.status_bar = tk.Label(
             body, textvariable=self._status, bg=BG, fg=MUTED, font=self.font_small, anchor="w",
-            wraplength=340, justify="left"
+            wraplength=420, justify="left"
         )
         self.status_bar.pack(fill="x", padx=10, pady=(0, 6))
 
@@ -660,8 +662,8 @@ class HudApp:
         menu.add_command(label="清理过期", command=self._clear_stale)
         menu.add_separator()
         menu.add_command(label="切换置顶", command=self._toggle_pin)
-        menu.add_command(label="下一个会话", command=lambda: self._cycle(1))
-        menu.add_command(label="上一个会话", command=lambda: self._cycle(-1))
+        menu.add_command(label="下一个厂家", command=lambda: self._cycle(1))
+        menu.add_command(label="上一个厂家", command=lambda: self._cycle(-1))
         menu.add_separator()
         menu.add_command(label="退出", command=self.quit)
         return menu
@@ -827,10 +829,10 @@ class HudApp:
         self.cfg["always_on_top"] = nxt
 
     def _cycle(self, delta: int) -> None:
-        if not self._states:
+        if not self._providers:
             return
-        self._selected = (self._selected + delta) % len(self._states)
-        self._render(self._states)
+        self._selected = (self._selected + delta) % len(self._providers)
+        self._render(self._providers)
 
     def _clear_stale(self) -> None:
         n = clear_stale()
@@ -875,12 +877,12 @@ class HudApp:
 
         threading.Thread(target=loop, daemon=True).start()
 
-    def _rebuild_chips(self, states: list[SessionState]) -> None:
+    def _rebuild_chips(self, providers: list[dict]) -> None:
         for w in self._chip_btns:
             w.destroy()
         self._chip_btns.clear()
-        for i, st in enumerate(states[:4]):
-            label = f"{truncate(st.agent, 12)}·{truncate(st.session_id, 14)}"
+        for i, row in enumerate(providers[:5]):
+            label = truncate(row.get("name") or row.get("id") or "?", 12)
             active = i == self._selected
             chip = tk.Label(
                 self.chip_bar,
@@ -897,10 +899,10 @@ class HudApp:
             self._chip_btns.append(chip)
 
     def _select(self, idx: int) -> None:
-        if not self._states:
+        if not self._providers:
             return
-        self._selected = max(0, min(idx, len(self._states) - 1))
-        self._render(self._states)
+        self._selected = max(0, min(idx, len(self._providers) - 1))
+        self._render(self._providers)
 
     def _tick_now(self) -> None:
         self._tick()
@@ -908,7 +910,6 @@ class HudApp:
     def _tick(self) -> None:
         try:
             self._daily = get_daily_summary()
-            # always reload cached balances from disk so DeepSeek/MiMo amounts stay visible
             try:
                 disk_bal = load_balances(max_age_sec=86400)
                 if disk_bal:
@@ -916,10 +917,10 @@ class HudApp:
             except Exception:
                 pass
             age = float(self.cfg.get("session_max_age_sec", 900) or 900)
-            states = list_states(max_age_sec=age)
-            self._states = states
-            self._rebuild_chips(states)
-            self._render(states)
+            self._states = list_states(max_age_sec=age)
+            self._providers = build_provider_view()
+            self._rebuild_chips(self._providers)
+            self._render(self._providers)
             self._status.set(time.strftime("%H:%M:%S 更新"))
         except Exception as exc:  # noqa: BLE001
             self._status.set(f"渲染错误: {exc}")
@@ -930,53 +931,47 @@ class HudApp:
         lab = self.metric_labels[key]
         lab.configure(text=text, fg=color or TEXT)
 
-    def _render(self, states: list[SessionState]) -> None:
+    def _render(self, providers: list[dict]) -> None:
         day_total = int((self._daily or {}).get("total_tokens") or 0)
-        self._render_balance_items(day_total, states[self._selected] if states else None)
+        self._render_provider_list(providers)
 
-        if not states:
-            self.sum_a.configure(text="暂无活跃会话")
-            self.sum_b.configure(text="点右上角 API 填密钥；agent 调 report.py 上报")
+        if not providers:
+            self.sum_a.configure(text="暂无已配置的 API")
+            self.sum_b.configure(text="点右上角 API → 选平台粘贴 Key")
             self.sum_c.configure(text=f"今日全局 {_fmt_tokens(day_total)} tokens")
             for key in self.metric_labels:
                 self._set_metric(key, "—")
             return
 
-        if self._selected >= len(states):
+        if self._selected >= len(providers):
             self._selected = 0
-        st = states[self._selected]
-        self.sum_a.configure(text=f"{st.agent} · {truncate(st.session_id, 28)}")
-        model = st.model or "—"
-        bal = match_balance_for_model(st.model, self._bal_items)
-        bal_txt = (
-            _fmt_money(bal.amount, bal.currency)
-            if bal
-            else _fmt_money(st.balance_usd, st.balance_currency or "CNY")
-        )
-        self.sum_b.configure(text=f"{truncate(model, 32)} · 余额 {bal_txt}")
+        row = providers[self._selected]
+        self.sum_a.configure(text=row.get("name") or row.get("id") or "—")
+        bal_txt = _fmt_money(row.get("amount"), row.get("currency") or "CNY")
+        if row.get("amount") is None:
+            bal_txt = "—"
+        self.sum_b.configure(text=f"{row.get('model_label') or '—'} · 余额 {bal_txt}")
         self.sum_c.configure(
-            text=f"会话 {self._selected + 1}/{len(states)} · 今日 {_fmt_tokens(day_total)}"
+            text=f"厂家 {self._selected + 1}/{len(providers)} · 今日全局 {_fmt_tokens(day_total)}"
         )
 
-        self._set_metric("model", truncate(model, 34))
-        self._set_metric("turnstep", f"{st.turn} / {st.step}")
-        self._set_metric("cache", _fmt_pct(st.cache_hit_rate))
-        if st.context_limit and st.context_used:
-            pct = st.context_used / st.context_limit * 100
-            self._set_metric(
-                "ctx",
-                f"{_fmt_tokens(st.context_used)}/{_fmt_tokens(st.context_limit)} ({pct:.0f}%)",
-                WARN if pct >= 80 else TEXT,
-            )
-        elif st.context_used:
-            self._set_metric("ctx", _fmt_tokens(st.context_used))
+        self._set_metric("model", truncate(str(row.get("name") or "—"), 28))
+        self._set_metric("turnstep", str(len(row.get("models") or [])))
+        self._set_metric("cache", bal_txt)
+        tokens_today = int(row.get("tokens_today") or 0)
+        self._set_metric("ctx", _fmt_tokens(tokens_today))
+        share = (tokens_today / day_total * 100) if day_total else 0
+        self._set_metric("tokens", f"{share:.0f}% / 全局 {_fmt_tokens(day_total)}")
+        if row.get("amount") is not None:
+            status_txt = "working"
+        elif row.get("api_key"):
+            status_txt = "idle"
         else:
-            self._set_metric("ctx", "—")
-        self._set_metric("tokens", f"{_fmt_tokens(st.tokens_today)} / {_fmt_tokens(day_total)}")
+            status_txt = "error"
         status_map = {"working": ACCENT, "idle": MUTED, "error": DANGER}
-        self._set_metric("status", st.status, status_map.get(st.status, TEXT))
+        self._set_metric("status", status_txt, status_map.get(status_txt, TEXT))
 
-    def _render_balance_items(self, day_total: int, st: SessionState | None) -> None:
+    def _render_provider_list(self, providers: list[dict]) -> None:
         for lab in self.bal_labels:
             lab.destroy()
         self.bal_labels.clear()
@@ -994,39 +989,23 @@ class HudApp:
             lab.pack(fill="x", padx=8, pady=1)
             self.bal_labels.append(lab)
 
-        if not self._bal_items:
-            add("尚未配置余额源", MUTED)
+        if not providers:
+            add("尚未配置任何 AI API", MUTED)
             add("点顶栏 API → 选平台 → 贴 Key", MUTED)
-            add("国内默认显示人民币 ¥", INFO)
+            add("将按厂家显示余额与今日 Token", INFO)
             return
 
-        current = match_balance_for_model(st.model, self._bal_items) if st else None
-        if current:
-            add(f"当前 · {current.provider_name}", INFO)
-            tag = ACCENT if current.amount is not None else WARN
-            add(
-                f"  {truncate(current.model, 36)}  {_fmt_money(current.amount, current.currency)}",
-                tag,
-            )
-            if current.raw_note:
-                add(f"  {truncate(current.raw_note, 40)}", MUTED)
-        add("其他", INFO)
-        shown = 0
-        others = [i for i in self._bal_items if not (current and i is current)]
-        # put known amounts first so DeepSeek doesn't look "missing"
-        others.sort(key=lambda i: (0 if i.amount is not None else 1, i.provider_name, i.model))
-        for item in others:
-            color = ACCENT if item.amount is not None else WARN
-            money = _fmt_money(item.amount, item.currency)
-            if item.amount is None:
-                money = "—"
-            add(
-                f"{truncate(item.provider_name, 14)} · {truncate(item.model, 28)}  {money}",
-                color,
-            )
-            shown += 1
-            if shown >= 12:
-                break
+        for i, row in enumerate(providers):
+            name = row.get("name") or row.get("id")
+            bal = _fmt_money(row.get("amount"), row.get("currency") or "CNY")
+            if row.get("amount") is None:
+                bal = "—"
+            tokens = _fmt_tokens(int(row.get("tokens_today") or 0))
+            color = ACCENT if row.get("amount") is not None else WARN
+            mark = "●" if i == self._selected else "○"
+            add(f"{mark} {truncate(name, 16)}  余额 {bal}  今日 {tokens}", color)
+            if row.get("note") and row.get("amount") is None:
+                add(f"   {truncate(str(row['note']), 36)}", MUTED)
             shown += 1
             if shown >= 12:
                 break
