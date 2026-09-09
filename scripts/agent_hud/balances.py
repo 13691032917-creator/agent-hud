@@ -248,12 +248,22 @@ def load_balances(max_age_sec: float = 3600.0) -> list[BalanceItem]:
 
 def match_balance_for_model(model: str, items: list[BalanceItem]) -> BalanceItem | None:
     if not model:
-        return None
+        # no model: prefer any provider-wide or first enabled amount
+        for item in items:
+            if item.amount is not None:
+                return item
+        return items[0] if items else None
     m = model.lower()
     # exact model match first
     for item in items:
         if item.model.lower() == m:
             return item
+    # provider token in model name (deepseek-v4-flash -> DeepSeek)
+    for item in items:
+        name = (item.provider_name or "").lower()
+        if name and name in m:
+            if item.model in {"(provider balance)", "*", ""} or item.amount is not None:
+                return item
     # provider-wide placeholder
     for item in items:
         if item.model in {"(provider balance)", "*", ""} and item.provider_name:
@@ -261,4 +271,9 @@ def match_balance_for_model(model: str, items: list[BalanceItem]) -> BalanceItem
                 token and token in m for token in item.provider_name.lower().split()
             ):
                 return item
+    # any enabled amount for that provider id prefix
+    for item in items:
+        pid = (item.provider_id or "").lower()
+        if pid and pid in m and item.amount is not None:
+            return item
     return None

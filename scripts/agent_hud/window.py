@@ -27,8 +27,8 @@ DANGER = "#F31260"
 INFO = "#5B9DFF"
 BORDER = "#243044"
 CHIP_BG = "#1E2A3A"
-CARD_W = 360
-CARD_H = 560
+CARD_W = 380
+CARD_H = 640
 
 # 简化预设：国内平台默认人民币
 PRESETS: list[dict] = [
@@ -133,13 +133,14 @@ class ApiSimpleDialog:
         self.providers = [
             normalize_provider(p) for p in (self.cfg.get("providers") or []) if isinstance(p, dict)
         ]
-        self.preset_idx = 0
+        self._busy = False
 
         self.win = tk.Toplevel(master)
         self.win.title("填写 API · 查余额")
         self.win.configure(bg=BG)
-        self.win.geometry("420x420+200+140")
-        self.win.resizable(False, False)
+        self.win.geometry("520x560+180+100")
+        self.win.minsize(480, 500)
+        self.win.resizable(True, True)
         try:
             self.win.transient(master.winfo_toplevel())
         except tk.TclError:
@@ -154,26 +155,64 @@ class ApiSimpleDialog:
         self.fs = tkfont.Font(family=family, size=10)
         self.fm = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=10)
 
+        # Footer first so buttons always stay visible
+        foot = tk.Frame(self.win, bg=PANEL2)
+        foot.pack(fill="x", side="bottom")
+        self.hint = tk.Label(
+            foot, text="", bg=PANEL2, fg=MUTED, font=self.fs, anchor="w", wraplength=480, pady=8
+        )
+        self.hint.pack(fill="x", padx=12, pady=(8, 0))
+        btn_row = tk.Frame(foot, bg=PANEL2)
+        btn_row.pack(fill="x", padx=12, pady=10)
+        tk.Button(
+            btn_row,
+            text="取消",
+            command=self.win.destroy,
+            bg=BG,
+            fg=MUTED,
+            relief="flat",
+            font=self.fs,
+            padx=14,
+            pady=6,
+        ).pack(side="right", padx=(8, 0))
+        self.save_btn = tk.Button(
+            btn_row,
+            text="保存并查余额",
+            command=self._save_and_fetch,
+            bg=ACCENT_DIM,
+            fg=TEXT,
+            activebackground=ACCENT,
+            relief="flat",
+            font=self.f,
+            padx=16,
+            pady=6,
+        )
+        self.save_btn.pack(side="right")
+
         body = tk.Frame(self.win, bg=BG)
-        body.pack(fill="both", expand=True, padx=14, pady=12)
+        body.pack(fill="both", expand=True, padx=16, pady=12)
 
         tk.Label(body, text="选择平台，粘贴 API Key", bg=BG, fg=TEXT, font=self.f, anchor="w").pack(
             fill="x"
         )
         tk.Label(
             body,
-            text="国内平台默认显示人民币 ¥；保存后自动拉余额",
+            text="国内平台默认人民币 ¥；点「保存并查余额」后会提示结果",
             bg=BG,
             fg=MUTED,
             font=self.fs,
             anchor="w",
-        ).pack(fill="x", pady=(2, 8))
+            wraplength=460,
+            justify="left",
+        ).pack(fill="x", pady=(2, 10))
 
         self.preset_var = tk.StringVar(value=PRESETS[0]["label"])
         row = tk.Frame(body, bg=BG)
-        row.pack(fill="x", pady=(0, 8))
+        row.pack(fill="x", pady=(0, 10))
         self.preset_box = tk.OptionMenu(row, self.preset_var, *[p["label"] for p in PRESETS])
-        self.preset_box.config(bg=PANEL, fg=TEXT, highlightthickness=0, relief="flat", font=self.fs)
+        self.preset_box.config(
+            bg=PANEL, fg=TEXT, highlightthickness=0, relief="flat", font=self.fs, pady=6
+        )
         self.preset_box.pack(fill="x")
         self.preset_var.trace_add("write", lambda *_: self._apply_preset_fields())
 
@@ -187,39 +226,12 @@ class ApiSimpleDialog:
         self._field(body, "Models（可选，逗号分隔）", self.models_var)
         self._field(body, "货币", self.cur_var)
 
-        self.hint = tk.Label(body, text="", bg=BG, fg=MUTED, font=self.fs, anchor="w", wraplength=320)
-        self.hint.pack(fill="x", pady=(6, 0))
-
-        foot = tk.Frame(body, bg=BG)
-        foot.pack(fill="x", pady=(12, 0))
-        tk.Button(
-            foot,
-            text="取消",
-            command=self.win.destroy,
-            bg=PANEL2,
-            fg=MUTED,
-            relief="flat",
-            font=self.fs,
-            padx=10,
-            pady=4,
-        ).pack(side="right", padx=(6, 0))
-        tk.Button(
-            foot,
-            text="保存并查余额",
-            command=self._save_and_fetch,
-            bg=ACCENT_DIM,
-            fg=TEXT,
-            relief="flat",
-            font=self.f,
-            padx=12,
-            pady=4,
-        ).pack(side="right")
-
         self._apply_preset_fields()
+        self.hint.config(text="填好后点右下角「保存并查余额」")
 
     def _field(self, parent, label, var, show=None) -> None:
         wrap = tk.Frame(parent, bg=BG)
-        wrap.pack(fill="x", pady=4)
+        wrap.pack(fill="x", pady=6)
         tk.Label(wrap, text=label, bg=BG, fg=MUTED, font=self.fs, anchor="w").pack(fill="x")
         tk.Entry(
             wrap,
@@ -230,7 +242,7 @@ class ApiSimpleDialog:
             insertbackground=TEXT,
             font=self.fm,
             relief="flat",
-        ).pack(fill="x", ipady=5)
+        ).pack(fill="x", ipady=6)
 
     def _apply_preset_fields(self) -> None:
         label = self.preset_var.get()
@@ -259,6 +271,12 @@ class ApiSimpleDialog:
         )
 
     def _save_and_fetch(self) -> None:
+        if self._busy:
+            return
+        from tkinter import messagebox
+
+        from .balances import refresh_balances
+
         label = self.preset_var.get()
         preset = next((p for p in PRESETS if p["label"] == label), PRESETS[0])
         key = self.key_var.get().strip()
@@ -270,6 +288,7 @@ class ApiSimpleDialog:
             return
         if not key and preset["type"] != "manual":
             self.hint.config(text="请先粘贴 API Key", fg=WARN)
+            self.key_var.set("")
             return
 
         provider = normalize_provider(
@@ -286,12 +305,64 @@ class ApiSimpleDialog:
                 "note": "simple-api-form",
             }
         )
-        # 合并：同 id 覆盖，其它保留
         others = [p for p in self.providers if p.get("id") != provider["id"]]
-        save_providers(self.cfg, others + [provider])
-        self.win.destroy()
-        if self.on_saved:
-            self.on_saved()
+        try:
+            save_providers(self.cfg, others + [provider])
+        except Exception as exc:  # noqa: BLE001
+            self.hint.config(text=f"保存配置失败: {exc}", fg=DANGER)
+            messagebox.showerror("保存失败", str(exc), parent=self.win)
+            return
+
+        self._busy = True
+        self.save_btn.configure(state="disabled", text="查询中…")
+        self.hint.config(text=f"已写入配置，正在查询 {provider['name']} 余额…", fg=INFO)
+        self.win.update_idletasks()
+
+        def work() -> None:
+            try:
+                items = refresh_balances()
+                mine = [i for i in items if i.provider_id == provider["id"]]
+                if not mine:
+                    mine = [i for i in items if provider["name"] and i.provider_name == provider["name"]]
+                ok = [i for i in mine if i.amount is not None]
+                if ok:
+                    msg = (
+                        f"已保存并查到余额：{ok[0].provider_name} "
+                        f"{_fmt_money(ok[0].amount, ok[0].currency)}"
+                    )
+                    if ok[0].raw_note:
+                        msg += f"（{ok[0].raw_note}）"
+                    level = "ok"
+                elif mine:
+                    note = mine[0].raw_note or "接口无余额字段"
+                    msg = f"已保存，但余额查询失败：{note}"
+                    level = "warn"
+                else:
+                    msg = "已保存配置，但未返回余额行"
+                    level = "warn"
+            except Exception as exc:  # noqa: BLE001
+                msg = f"查询失败: {exc}"
+                level = "err"
+
+            def done() -> None:
+                self._busy = False
+                self.save_btn.configure(state="normal", text="保存并查余额")
+                color = {"ok": ACCENT, "warn": WARN, "err": DANGER}.get(level, TEXT)
+                self.hint.config(text=msg, fg=color)
+                if level == "ok":
+                    messagebox.showinfo("余额结果", msg, parent=self.win)
+                else:
+                    messagebox.showwarning("余额结果", msg, parent=self.win)
+                if self.on_saved:
+                    try:
+                        self.on_saved()
+                    except Exception:
+                        pass
+                self.win.after(400, self.win.destroy)
+
+            self.win.after(0, done)
+
+        threading.Thread(target=work, daemon=True).start()
 
 
 class HudApp:
@@ -473,9 +544,23 @@ class HudApp:
         self.bal_labels: list[tk.Label] = []
 
         self.status_bar = tk.Label(
-            body, textvariable=self._status, bg=BG, fg=MUTED, font=self.font_small, anchor="w"
+            body, textvariable=self._status, bg=BG, fg=MUTED, font=self.font_small, anchor="w",
+            wraplength=340, justify="left"
         )
         self.status_bar.pack(fill="x", padx=10, pady=(0, 6))
+
+        # transient toast overlay
+        self.toast = tk.Label(
+            self.card,
+            text="",
+            bg=ACCENT_DIM,
+            fg=TEXT,
+            font=self.font_small,
+            padx=10,
+            pady=8,
+            justify="left",
+            wraplength=320,
+        )
 
     def _build_menu(self) -> tk.Menu:
         menu = tk.Menu(self.root, tearoff=0, bg=PANEL2, fg=TEXT, activebackground=ACCENT_DIM)
@@ -529,6 +614,18 @@ class HudApp:
     def _drag_end(self, event: tk.Event | None = None) -> None:
         self._dragging = False
 
+    def _show_toast(self, text: str, color: str = ACCENT_DIM, ms: int = 4000) -> None:
+        self.toast.configure(text=text, bg=color)
+        self.toast.place(relx=0.5, rely=0.5, anchor="center")
+        self.toast.lift()
+        prev = getattr(self, "_toast_after", None)
+        if prev:
+            try:
+                self.root.after_cancel(prev)
+            except Exception:
+                pass
+        self._toast_after = self.root.after(ms, self.toast.place_forget)
+
     def open_api_dialog(self) -> None:
         try:
             self._status.set("正在打开 API 配置…")
@@ -536,6 +633,7 @@ class HudApp:
             ApiSimpleDialog(self.root, on_saved=self._on_api_saved)
         except Exception as exc:  # noqa: BLE001
             self._status.set(f"打开 API 失败: {exc}")
+            self._show_toast(f"打开 API 失败: {exc}", DANGER, 6000)
             try:
                 from .paths import log_path
 
@@ -546,8 +644,10 @@ class HudApp:
     def _on_api_saved(self) -> None:
         self.cfg = load_config()
         self._bal_items = load_balances()
-        self._status.set("已保存，正在查询余额…")
+        self._status.set("配置已保存，刷新余额中…")
+        self._show_toast("API 配置已保存，正在刷新余额…", ACCENT_DIM, 3000)
         threading.Thread(target=self._fetch_balances, daemon=True).start()
+        self._tick_now()
 
     def _toggle_pin(self) -> None:
         nxt = not bool(self.root.attributes("-topmost"))
@@ -576,11 +676,25 @@ class HudApp:
 
     def _fetch_balances(self) -> None:
         try:
-            self._bal_items = refresh_balances()
+            items = refresh_balances()
+            self._bal_items = items
+            ok = [i for i in items if i.amount is not None]
+            if ok:
+                summary = "；".join(
+                    f"{i.provider_name} {_fmt_money(i.amount, i.currency)}" for i in ok[:3]
+                )
+                msg = f"余额已更新：{summary}"
+                self.root.after(0, lambda: self._status.set(time.strftime("%H:%M:%S ") + msg))
+                self.root.after(0, lambda: self._show_toast(msg, ACCENT_DIM, 5000))
+            else:
+                note = items[0].raw_note if items else "无数据"
+                msg = f"余额查询完成但无金额：{note}"
+                self.root.after(0, lambda: self._status.set(msg))
+                self.root.after(0, lambda: self._show_toast(msg, WARN, 5000))
             self.root.after(0, self._tick_now)
-            self.root.after(0, lambda: self._status.set(time.strftime("%H:%M:%S 余额已更新")))
         except Exception as exc:  # noqa: BLE001
             self.root.after(0, lambda: self._status.set(f"余额失败: {exc}"))
+            self.root.after(0, lambda: self._show_toast(f"余额失败: {exc}", DANGER, 5000))
 
     def _start_bg(self) -> None:
         def loop() -> None:
