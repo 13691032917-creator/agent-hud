@@ -27,8 +27,8 @@ DANGER = "#F31260"
 INFO = "#5B9DFF"
 BORDER = "#243044"
 CHIP_BG = "#1E2A3A"
-CARD_W = 400
-CARD_H = 700
+CARD_W = 460
+CARD_H = 720
 
 # 简化预设：国内平台默认人民币
 PRESETS: list[dict] = [
@@ -138,8 +138,8 @@ class ApiSimpleDialog:
         self.win = tk.Toplevel(master)
         self.win.title("Agent HUD · 填写 API Key")
         self.win.configure(bg=BG)
-        self.win.geometry("480x460+160+120")
-        self.win.minsize(420, 420)
+        self.win.geometry("500x480+160+120")
+        self.win.minsize(460, 440)
         self.win.resizable(True, True)
         try:
             self.win.transient(master.winfo_toplevel())
@@ -818,7 +818,7 @@ class HudApp:
             w.destroy()
         self._chip_btns.clear()
         for i, st in enumerate(states[:4]):
-            label = f"{truncate(st.agent, 8)}·{truncate(st.session_id, 8)}"
+            label = f"{truncate(st.agent, 12)}·{truncate(st.session_id, 14)}"
             active = i == self._selected
             chip = tk.Label(
                 self.chip_bar,
@@ -876,7 +876,7 @@ class HudApp:
         if self._selected >= len(states):
             self._selected = 0
         st = states[self._selected]
-        self.sum_a.configure(text=f"{st.agent} · {truncate(st.session_id, 18)}")
+        self.sum_a.configure(text=f"{st.agent} · {truncate(st.session_id, 28)}")
         model = st.model or "—"
         bal = match_balance_for_model(st.model, self._bal_items)
         bal_txt = (
@@ -884,12 +884,12 @@ class HudApp:
             if bal
             else _fmt_money(st.balance_usd, st.balance_currency or "CNY")
         )
-        self.sum_b.configure(text=f"{truncate(model, 20)} · 余额 {bal_txt}")
+        self.sum_b.configure(text=f"{truncate(model, 32)} · 余额 {bal_txt}")
         self.sum_c.configure(
             text=f"会话 {self._selected + 1}/{len(states)} · 今日 {_fmt_tokens(day_total)}"
         )
 
-        self._set_metric("model", truncate(model, 28))
+        self._set_metric("model", truncate(model, 34))
         self._set_metric("turnstep", f"{st.turn} / {st.step}")
         self._set_metric("cache", _fmt_pct(st.cache_hit_rate))
         if st.context_limit and st.context_used:
@@ -936,11 +936,11 @@ class HudApp:
             add(f"当前 · {current.provider_name}", INFO)
             tag = ACCENT if current.amount is not None else WARN
             add(
-                f"  {truncate(current.model, 20)}  {_fmt_money(current.amount, current.currency)}",
+                f"  {truncate(current.model, 36)}  {_fmt_money(current.amount, current.currency)}",
                 tag,
             )
             if current.raw_note:
-                add(f"  {truncate(current.raw_note, 26)}", MUTED)
+                add(f"  {truncate(current.raw_note, 40)}", MUTED)
         add("其他", INFO)
         shown = 0
         for item in self._bal_items:
@@ -948,7 +948,7 @@ class HudApp:
                 continue
             color = ACCENT if item.amount is not None else WARN
             add(
-                f"{truncate(item.provider_name, 10)} · {truncate(item.model, 14)}  "
+                f"{truncate(item.provider_name, 14)} · {truncate(item.model, 28)}  "
                 f"{_fmt_money(item.amount, item.currency)}",
                 color,
             )
