@@ -11,8 +11,8 @@ from .paths import config_path, skill_scripts_dir
 DEFAULT_CONFIG: dict[str, Any] = {
     "refresh_interval_sec": 3,
     "balance_refresh_sec": 300,
-    "session_max_age_sec": 180,
-    "opacity": 0.96,
+    "session_max_age_sec": 900,
+    "opacity": 0.98,
     "always_on_top": True,
     "providers": [],
 }
