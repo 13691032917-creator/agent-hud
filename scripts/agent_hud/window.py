@@ -125,7 +125,7 @@ def _enable_rounded_corners(widget: tk.Misc) -> None:
 
 
 class ApiSimpleDialog:
-    """极简 API 配置：平台 + Key（+ 中转站 URL），固定底部保存按钮。"""
+    """极简 API 配置：平台 + Key（+ 中转站 URL）。系统边框，可自由拉伸。"""
 
     def __init__(self, master: tk.Misc, on_saved: Callable[[], None] | None = None) -> None:
         self.on_saved = on_saved
@@ -136,11 +136,11 @@ class ApiSimpleDialog:
         self._busy = False
 
         self.win = tk.Toplevel(master)
-        self.win.title("填写 API Key")
-        self.win.configure(bg=BORDER)
-        # fixed compact size — form is short so save is always visible
-        self.win.geometry("420x400+160+120")
-        self.win.resizable(False, False)
+        self.win.title("填写 API Key · 查余额")
+        self.win.configure(bg=BG)
+        self.win.geometry("460x420+160+120")
+        self.win.minsize(380, 360)
+        self.win.resizable(True, True)  # free resize via system borders
         try:
             self.win.transient(master.winfo_toplevel())
         except tk.TclError:
@@ -151,24 +151,93 @@ class ApiSimpleDialog:
             pass
 
         family = "Microsoft YaHei UI" if is_windows() else "Segoe UI"
-        self.f = tkfont.Font(family=family, size=12)
-        self.fs = tkfont.Font(family=family, size=11)
+        self.f = tkfont.Font(family=family, size=11)
+        self.fs = tkfont.Font(family=family, size=10)
         self.fm = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=11)
 
-        border = tk.Frame(self.win, bg=BORDER, padx=1, pady=1)
-        border.pack(fill="both", expand=True)
-        card = tk.Frame(border, bg=BG)
-        card.pack(fill="both", expand=True)
+        self.win.rowconfigure(0, weight=1)
+        self.win.columnconfigure(0, weight=1)
 
-        # pack order: bottom footer first, then top chrome, then body fills middle
-        foot = tk.Frame(card, bg=PANEL2)
-        foot.pack(fill="x", side="bottom")
-        self.hint = tk.Label(
-            foot, text="", bg=PANEL2, fg=MUTED, font=self.fs, anchor="w", wraplength=380, pady=6
+        form = tk.Frame(self.win, bg=BG)
+        form.grid(row=0, column=0, sticky="nsew", padx=12, pady=10)
+        form.columnconfigure(1, weight=1)
+        for r in range(8):
+            form.rowconfigure(r, weight=0)
+        form.rowconfigure(7, weight=1)  # spacer
+
+        tk.Label(form, text="选平台，粘贴 API Key", bg=BG, fg=TEXT, font=self.f, anchor="w").grid(
+            row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8)
         )
-        self.hint.pack(fill="x", padx=12)
+
+        tk.Label(form, text="平台", bg=BG, fg=MUTED, font=self.fs, anchor="w").grid(
+            row=1, column=0, sticky="w", pady=4, padx=(0, 8)
+        )
+        self.preset_var = tk.StringVar(value=PRESETS[0]["label"])
+        self.preset_box = tk.OptionMenu(form, self.preset_var, *[p["label"] for p in PRESETS])
+        self.preset_box.config(
+            bg=PANEL, fg=TEXT, highlightthickness=0, relief="flat", font=self.fs, pady=2, anchor="w"
+        )
+        self.preset_box.grid(row=1, column=1, sticky="ew", pady=4)
+        self.preset_var.trace_add("write", lambda *_: self._apply_preset_fields())
+
+        self.key_var = tk.StringVar()
+        self.url_var = tk.StringVar()
+        self.models_var = tk.StringVar()
+        self.cur_var = tk.StringVar(value="CNY")
+
+        tk.Label(form, text="API Key", bg=BG, fg=MUTED, font=self.fs, anchor="w").grid(
+            row=2, column=0, sticky="w", pady=4, padx=(0, 8)
+        )
+        self.key_entry = tk.Entry(
+            form,
+            textvariable=self.key_var,
+            show="•",
+            bg=PANEL,
+            fg=TEXT,
+            insertbackground=TEXT,
+            font=self.fm,
+            relief="flat",
+        )
+        self.key_entry.grid(row=2, column=1, sticky="ew", pady=4, ipady=4)
+
+        tk.Label(form, text="Base URL", bg=BG, fg=MUTED, font=self.fs, anchor="w").grid(
+            row=3, column=0, sticky="w", pady=4, padx=(0, 8)
+        )
+        self.url_entry = tk.Entry(
+            form,
+            textvariable=self.url_var,
+            bg=PANEL,
+            fg=TEXT,
+            insertbackground=TEXT,
+            font=self.fm,
+            relief="flat",
+        )
+        self.url_entry.grid(row=3, column=1, sticky="ew", pady=4, ipady=4)
+
+        tk.Label(form, text="货币", bg=BG, fg=MUTED, font=self.fs, anchor="w").grid(
+            row=4, column=0, sticky="w", pady=4, padx=(0, 8)
+        )
+        tk.Entry(
+            form,
+            textvariable=self.cur_var,
+            bg=PANEL,
+            fg=TEXT,
+            insertbackground=TEXT,
+            font=self.fm,
+            relief="flat",
+            width=8,
+        ).grid(row=4, column=1, sticky="w", pady=4, ipady=4)
+
+        # bottom bar
+        foot = tk.Frame(self.win, bg=PANEL2)
+        foot.grid(row=1, column=0, sticky="ew")
+        foot.columnconfigure(0, weight=1)
+        self.hint = tk.Label(
+            foot, text="", bg=PANEL2, fg=MUTED, font=self.fs, anchor="w", wraplength=420
+        )
+        self.hint.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
         btn_row = tk.Frame(foot, bg=PANEL2)
-        btn_row.pack(fill="x", padx=12, pady=8)
+        btn_row.grid(row=1, column=0, sticky="e", padx=12, pady=(2, 10))
         tk.Button(
             btn_row,
             text="取消",
@@ -194,77 +263,10 @@ class ApiSimpleDialog:
         )
         self.save_btn.pack(side="right")
 
-        chrome = tk.Frame(card, bg=PANEL2, height=36)
-        chrome.pack(fill="x", side="top")
-        chrome.pack_propagate(False)
-        tk.Label(chrome, text="  API Key · 余额", bg=PANEL2, fg=TEXT, font=self.f, anchor="w").pack(
-            side="left", fill="both", expand=True
-        )
-        tk.Button(
-            chrome,
-            text="×",
-            command=self.win.destroy,
-            bg=PANEL2,
-            fg=MUTED,
-            activebackground=DANGER,
-            relief="flat",
-            font=self.f,
-            bd=0,
-            padx=10,
-            takefocus=False,
-        ).pack(side="right", padx=4, pady=4)
-
-        body = tk.Frame(card, bg=BG)
-        body.pack(fill="both", expand=True, padx=14, pady=12)
-
-        tk.Label(body, text="选平台，粘贴 Key，点保存", bg=BG, fg=TEXT, font=self.fs, anchor="w").pack(
-            fill="x", pady=(0, 8)
-        )
-
-        self.preset_var = tk.StringVar(value=PRESETS[0]["label"])
-        tk.Label(body, text="平台", bg=BG, fg=MUTED, font=self.fs, anchor="w").pack(fill="x")
-        self.preset_box = tk.OptionMenu(body, self.preset_var, *[p["label"] for p in PRESETS])
-        self.preset_box.config(
-            bg=PANEL, fg=TEXT, highlightthickness=0, relief="flat", font=self.fs, pady=4
-        )
-        self.preset_box.pack(fill="x", pady=(2, 8))
-        self.preset_var.trace_add("write", lambda *_: self._apply_preset_fields())
-
-        self.key_var = tk.StringVar()
-        self.url_var = tk.StringVar()
-        self.models_var = tk.StringVar()
-        self.cur_var = tk.StringVar(value="CNY")
-
-        tk.Label(body, text="API Key", bg=BG, fg=MUTED, font=self.fs, anchor="w").pack(fill="x")
-        self.key_entry = tk.Entry(
-            body,
-            textvariable=self.key_var,
-            show="•",
-            bg=PANEL,
-            fg=TEXT,
-            insertbackground=TEXT,
-            font=self.fm,
-            relief="flat",
-        )
-        self.key_entry.pack(fill="x", pady=(2, 8), ipady=5)
-
-        tk.Label(body, text="Base URL（仅中转站）", bg=BG, fg=MUTED, font=self.fs, anchor="w").pack(
-            fill="x"
-        )
-        self.url_entry = tk.Entry(
-            body,
-            textvariable=self.url_var,
-            bg=PANEL,
-            fg=TEXT,
-            insertbackground=TEXT,
-            font=self.fm,
-            relief="flat",
-        )
-        self.url_entry.pack(fill="x", pady=(2, 8), ipady=5)
-
+        self.win.rowconfigure(0, weight=1)
         self._apply_preset_fields()
         self.hint.config(text="填 Key 后点「保存并查余额」")
-        self.win.after(50, self.key_entry.focus_set)
+        self.win.after(80, self.key_entry.focus_set)
 
     def _apply_preset_fields(self) -> None:
         label = self.preset_var.get()
@@ -428,6 +430,7 @@ class HudApp:
         self._build()
         # 全卡片可拖（按钮/输入除外）
         self._bind_drag_tree(self.card)
+        self._install_resize_handles()
         self.root.bind("<Button-3>", self._popup_menu)
         self.root.bind("<Button-2>", self._popup_menu)
         self._menu = self._build_menu()
@@ -638,6 +641,83 @@ class HudApp:
 
     def _drag_end(self, event: tk.Event | None = None) -> None:
         self._dragging = False
+
+    def _install_resize_handles(self) -> None:
+        """Frameless window edge grips — drag any border/corner to resize."""
+        grip = 8
+        self._rs = {"dir": None, "x": 0, "y": 0, "w": 0, "h": 0, "gx": 0, "gy": 0}
+
+        def make(dir_name: str, cursor: str) -> None:
+            f = tk.Frame(self.card, bg=BORDER, cursor=cursor, width=grip, height=grip)
+            # N / S / E / W / corners
+            if dir_name == "n":
+                f.place(relx=0, rely=0, relwidth=1, height=grip)
+            elif dir_name == "s":
+                f.place(relx=0, rely=1, relwidth=1, height=grip, anchor="sw")
+            elif dir_name == "e":
+                f.place(relx=1, rely=0, relheight=1, width=grip, anchor="ne")
+            elif dir_name == "w":
+                f.place(relx=0, rely=0, relheight=1, width=grip, anchor="nw")
+            elif dir_name == "nw":
+                f.place(relx=0, rely=0, width=grip * 2, height=grip * 2)
+            elif dir_name == "ne":
+                f.place(relx=1, rely=0, width=grip * 2, height=grip * 2, anchor="ne")
+            elif dir_name == "sw":
+                f.place(relx=0, rely=1, width=grip * 2, height=grip * 2, anchor="sw")
+            elif dir_name == "se":
+                f.place(relx=1, rely=1, width=grip * 2, height=grip * 2, anchor="se")
+
+            f.bind("<Button-1>", lambda e, d=dir_name: self._rs_start(e, d))
+            f.bind("<B1-Motion>", self._rs_move)
+            f.bind("<ButtonRelease-1>", self._rs_end)
+
+        for d, c in (
+            ("n", "sb_v_double_arrow"),
+            ("s", "sb_v_double_arrow"),
+            ("e", "sb_h_double_arrow"),
+            ("w", "sb_h_double_arrow"),
+            ("nw", "size_nw_se"),
+            ("se", "size_nw_se"),
+            ("ne", "size_ne_sw"),
+            ("sw", "size_ne_sw"),
+        ):
+            make(d, c)
+
+    def _rs_start(self, event: tk.Event, dir_name: str) -> None:
+        self._rs["dir"] = dir_name
+        self._rs["x"] = event.x_root
+        self._rs["y"] = event.y_root
+        self._rs["w"] = self.root.winfo_width()
+        self._rs["h"] = self.root.winfo_height()
+        self._rs["gx"] = self.root.winfo_x()
+        self._rs["gy"] = self.root.winfo_y()
+
+    def _rs_move(self, event: tk.Event) -> None:
+        d = self._rs.get("dir")
+        if not d:
+            return
+        dx = event.x_root - self._rs["x"]
+        dy = event.y_root - self._rs["y"]
+        w = self._rs["w"]
+        h = self._rs["h"]
+        x = self._rs["gx"]
+        y = self._rs["gy"]
+        if "e" in d:
+            w = max(280, w + dx)
+        if "s" in d:
+            h = max(360, h + dy)
+        if "w" in d:
+            nw = max(280, w - dx)
+            x = x + (w - nw)
+            w = nw
+        if "n" in d:
+            nh = max(360, h - dy)
+            y = y + (h - nh)
+            h = nh
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _rs_end(self, event: tk.Event | None = None) -> None:
+        self._rs["dir"] = None
 
     def _show_toast(self, text: str, color: str = ACCENT_DIM, ms: int = 4000) -> None:
         self.toast.configure(text=text, bg=color)
