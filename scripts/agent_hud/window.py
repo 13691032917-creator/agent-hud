@@ -27,8 +27,8 @@ DANGER = "#F31260"
 INFO = "#5B9DFF"
 BORDER = "#243044"
 CHIP_BG = "#1E2A3A"
-CARD_W = 300
-CARD_H = 460
+CARD_W = 360
+CARD_H = 560
 
 # 简化预设：国内平台默认人民币
 PRESETS: list[dict] = [
@@ -138,19 +138,21 @@ class ApiSimpleDialog:
         self.win = tk.Toplevel(master)
         self.win.title("填写 API · 查余额")
         self.win.configure(bg=BG)
-        self.win.geometry("360x340+240+180")
+        self.win.geometry("420x420+200+140")
         self.win.resizable(False, False)
-        self.win.transient(master)
-        self.win.grab_set()
+        try:
+            self.win.transient(master.winfo_toplevel())
+        except tk.TclError:
+            pass
         try:
             self.win.attributes("-topmost", True)
         except tk.TclError:
             pass
 
         family = "Microsoft YaHei UI" if is_windows() else "Segoe UI"
-        self.f = tkfont.Font(family=family, size=10)
-        self.fs = tkfont.Font(family=family, size=9)
-        self.fm = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=9)
+        self.f = tkfont.Font(family=family, size=11)
+        self.fs = tkfont.Font(family=family, size=10)
+        self.fm = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=10)
 
         body = tk.Frame(self.win, bg=BG)
         body.pack(fill="both", expand=True, padx=14, pady=12)
@@ -180,10 +182,10 @@ class ApiSimpleDialog:
         self.models_var = tk.StringVar()
         self.cur_var = tk.StringVar(value="CNY")
 
-        self._field(body, "API Key", self.key_var, show="•", height=28)
+        self._field(body, "API Key", self.key_var, show="•")
         self._field(body, "Base URL（中转站必填）", self.url_var)
         self._field(body, "Models（可选，逗号分隔）", self.models_var)
-        self._field(body, "货币", self.cur_var, height=8)
+        self._field(body, "货币", self.cur_var)
 
         self.hint = tk.Label(body, text="", bg=BG, fg=MUTED, font=self.fs, anchor="w", wraplength=320)
         self.hint.pack(fill="x", pady=(6, 0))
@@ -215,9 +217,9 @@ class ApiSimpleDialog:
 
         self._apply_preset_fields()
 
-    def _field(self, parent, label, var, show=None, height=24) -> None:
+    def _field(self, parent, label, var, show=None) -> None:
         wrap = tk.Frame(parent, bg=BG)
-        wrap.pack(fill="x", pady=3)
+        wrap.pack(fill="x", pady=4)
         tk.Label(wrap, text=label, bg=BG, fg=MUTED, font=self.fs, anchor="w").pack(fill="x")
         tk.Entry(
             wrap,
@@ -228,8 +230,7 @@ class ApiSimpleDialog:
             insertbackground=TEXT,
             font=self.fm,
             relief="flat",
-            height=height if False else None,
-        ).pack(fill="x", ipady=4)
+        ).pack(fill="x", ipady=5)
 
     def _apply_preset_fields(self) -> None:
         label = self.preset_var.get()
@@ -310,10 +311,10 @@ class HudApp:
             pass
 
         family = "Microsoft YaHei UI" if is_windows() else "Segoe UI"
-        self.font_title = tkfont.Font(family=family, size=11, weight="bold")
-        self.font_ui = tkfont.Font(family=family, size=10)
-        self.font_small = tkfont.Font(family=family, size=9)
-        self.font_mono = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=9)
+        self.font_title = tkfont.Font(family=family, size=12, weight="bold")
+        self.font_ui = tkfont.Font(family=family, size=11)
+        self.font_small = tkfont.Font(family=family, size=10)
+        self.font_mono = tkfont.Font(family="Consolas" if is_windows() else "Menlo", size=10)
 
         self._drag = {"x": 0, "y": 0}
         self._dragging = False
@@ -345,41 +346,68 @@ class HudApp:
 
     def _build(self) -> None:
         # chrome
-        self.top = tk.Frame(self.card, bg=PANEL2, height=32)
+        self.top = tk.Frame(self.card, bg=PANEL2, height=40)
         self.top.pack(fill="x")
         self.top.pack_propagate(False)
-        title = tk.Label(self.top, text=" Agent HUD", bg=PANEL2, fg=TEXT, font=self.font_title, anchor="w")
+        title = tk.Label(
+            self.top, text=" Agent HUD", bg=PANEL2, fg=TEXT, font=self.font_title, anchor="w"
+        )
         title.pack(side="left", fill="both", expand=True)
 
-        self.pin_btn = tk.Label(
+        # Real Buttons — click always wins over drag
+        self.pin_btn = tk.Button(
             self.top,
             text="PIN",
+            command=self._toggle_pin,
             bg=PANEL2,
             fg=ACCENT if self.cfg.get("always_on_top", True) else MUTED,
+            activebackground=CHIP_BG,
+            activeforeground=TEXT,
+            relief="flat",
             font=self.font_small,
+            bd=0,
+            padx=10,
+            pady=4,
             cursor="hand2",
-            padx=6,
+            takefocus=False,
         )
-        self.pin_btn.pack(side="right")
-        self.pin_btn.bind("<Button-1>", lambda e: self._toggle_pin())
-        self.pin_btn.bind("<ButtonPress-1>", lambda e: self._press(True))
-        self.pin_btn.bind("<ButtonRelease-1>", lambda e: self._press(False))
+        self.pin_btn.pack(side="right", padx=2, pady=4)
 
-        self.api_btn = tk.Label(
-            self.top, text="API", bg=PANEL2, fg=INFO, font=self.font_small, cursor="hand2", padx=6
+        self.api_btn = tk.Button(
+            self.top,
+            text="API",
+            command=self.open_api_dialog,
+            bg=CHIP_BG,
+            fg=INFO,
+            activebackground=INFO,
+            activeforeground=BG,
+            relief="flat",
+            font=self.font_small,
+            bd=0,
+            padx=12,
+            pady=4,
+            cursor="hand2",
+            takefocus=False,
         )
-        self.api_btn.pack(side="right")
-        self.api_btn.bind("<Button-1>", lambda e: self.open_api_dialog())
-        self.api_btn.bind("<ButtonPress-1>", lambda e: self._press(True))
-        self.api_btn.bind("<ButtonRelease-1>", lambda e: self._press(False))
+        self.api_btn.pack(side="right", padx=2, pady=4)
 
-        self.close_btn = tk.Label(
-            self.top, text="×", bg=PANEL2, fg=MUTED, font=self.font_title, cursor="hand2", padx=8
+        self.close_btn = tk.Button(
+            self.top,
+            text="×",
+            command=self.quit,
+            bg=PANEL2,
+            fg=MUTED,
+            activebackground=DANGER,
+            activeforeground=TEXT,
+            relief="flat",
+            font=self.font_title,
+            bd=0,
+            padx=10,
+            pady=2,
+            cursor="hand2",
+            takefocus=False,
         )
-        self.close_btn.pack(side="right")
-        self.close_btn.bind("<Button-1>", lambda e: self.quit())
-        self.close_btn.bind("<ButtonPress-1>", lambda e: self._press(True))
-        self.close_btn.bind("<ButtonRelease-1>", lambda e: self._press(False))
+        self.close_btn.pack(side="right", padx=2, pady=4)
 
         body = tk.Frame(self.card, bg=BG)
         body.pack(fill="both", expand=True)
@@ -470,8 +498,10 @@ class HudApp:
         self._pressed_btn = flag
 
     def _bind_drag_tree(self, widget: tk.Misc) -> None:
-        # allow text widgets to receive select; still drag via empty areas of chrome
-        if isinstance(widget, (tk.Entry, tk.Listbox)):
+        # Never attach drag handlers to interactive controls
+        if isinstance(widget, (tk.Button, tk.Entry, tk.Listbox, tk.Checkbutton, tk.OptionMenu)):
+            return
+        if widget in (self.pin_btn, self.api_btn, self.close_btn):
             return
         widget.bind("<Button-1>", self._drag_start, add="+")
         widget.bind("<B1-Motion>", self._drag_move, add="+")
@@ -480,6 +510,9 @@ class HudApp:
             self._bind_drag_tree(child)
 
     def _drag_start(self, event: tk.Event) -> None:
+        # Ignore presses that originate on control widgets
+        if isinstance(getattr(event, "widget", None), (tk.Button, tk.Entry)):
+            return
         if self._pressed_btn:
             return
         self._dragging = True
@@ -497,7 +530,18 @@ class HudApp:
         self._dragging = False
 
     def open_api_dialog(self) -> None:
-        ApiSimpleDialog(self.root, on_saved=self._on_api_saved)
+        try:
+            self._status.set("正在打开 API 配置…")
+            self.root.update_idletasks()
+            ApiSimpleDialog(self.root, on_saved=self._on_api_saved)
+        except Exception as exc:  # noqa: BLE001
+            self._status.set(f"打开 API 失败: {exc}")
+            try:
+                from .paths import log_path
+
+                log_path().write_text(f"api dialog error: {exc}\n", encoding="utf-8")
+            except OSError:
+                pass
 
     def _on_api_saved(self) -> None:
         self.cfg = load_config()
@@ -626,7 +670,7 @@ class HudApp:
             text=f"会话 {self._selected + 1}/{len(states)} · 今日 {_fmt_tokens(day_total)}"
         )
 
-        self._set_metric("model", truncate(model, 22))
+        self._set_metric("model", truncate(model, 28))
         self._set_metric("turnstep", f"{st.turn} / {st.step}")
         self._set_metric("cache", _fmt_pct(st.cache_hit_rate))
         if st.context_limit and st.context_used:
