@@ -29,8 +29,14 @@ def normalize_provider(raw: dict[str, Any]) -> dict[str, Any]:
     p.setdefault("base_url", "")
     p.setdefault("models", [])
     p.setdefault("enabled", False)
-    p.setdefault("currency", "USD")
+    p.setdefault("currency", "")
     p.setdefault("note", "")
+    cn_types = {"deepseek", "moonshot", "siliconflow", "new_api", "one_api", "zhipu", "qwen"}
+    if p.get("type") in cn_types:
+        p["currency"] = "CNY"
+    if not p.get("currency"):
+        p["currency"] = "CNY"
+    p["currency"] = str(p["currency"]).upper().replace("RMB", "CNY")
     if isinstance(p.get("models"), str):
         p["models"] = [m.strip() for m in p["models"].split(",") if m.strip()]
     if not isinstance(p.get("models"), list):
