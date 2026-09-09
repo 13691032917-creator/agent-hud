@@ -908,6 +908,13 @@ class HudApp:
     def _tick(self) -> None:
         try:
             self._daily = get_daily_summary()
+            # always reload cached balances from disk so DeepSeek/MiMo amounts stay visible
+            try:
+                disk_bal = load_balances(max_age_sec=86400)
+                if disk_bal:
+                    self._bal_items = disk_bal
+            except Exception:
+                pass
             age = float(self.cfg.get("session_max_age_sec", 900) or 900)
             states = list_states(max_age_sec=age)
             self._states = states
@@ -1005,15 +1012,21 @@ class HudApp:
                 add(f"  {truncate(current.raw_note, 40)}", MUTED)
         add("其他", INFO)
         shown = 0
-        for item in self._bal_items:
-            if current and item is current:
-                continue
+        others = [i for i in self._bal_items if not (current and i is current)]
+        # put known amounts first so DeepSeek doesn't look "missing"
+        others.sort(key=lambda i: (0 if i.amount is not None else 1, i.provider_name, i.model))
+        for item in others:
             color = ACCENT if item.amount is not None else WARN
+            money = _fmt_money(item.amount, item.currency)
+            if item.amount is None:
+                money = "—"
             add(
-                f"{truncate(item.provider_name, 14)} · {truncate(item.model, 28)}  "
-                f"{_fmt_money(item.amount, item.currency)}",
+                f"{truncate(item.provider_name, 14)} · {truncate(item.model, 28)}  {money}",
                 color,
             )
+            shown += 1
+            if shown >= 12:
+                break
             shown += 1
             if shown >= 12:
                 break
