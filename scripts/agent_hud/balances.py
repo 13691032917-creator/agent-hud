@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 from .config import load_config
@@ -93,6 +94,105 @@ def _parse_money(value: Any) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def _load_mimo_key_from_mimocode() -> str:
+    """Best-effort read of Xiaomi MiMo API key from local mimocode config."""
+    candidates = []
+    home = Path.home()
+    candidates.append(home / ".config" / "mimocode" / "mimocode.jsonc")
+    candidates.append(Path.home() / "AppData" / "Roaming" / "Xiaomi MiMo" / "mimocode.jsonc")
+    import json as _json
+    import re as _re
+    for path in candidates:
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        # strip // comments for jsonc
+        raw = _re.sub(r"^\s*//.*$", "", raw, flags=_re.M)
+        try:
+            data = _json.loads(raw)
+            key = (
+                _dig(data, "provider.xiaomi-mimo-api.options.apiKey")
+                or _dig(data, "providers.xiaomi-mimo-api.options.apiKey")
+            )
+            if isinstance(key, str) and key.startswith("sk-"):
+                return key
+        except Exception:
+            m = _re.search(r'"apiKey"\s*:\s*"(sk-[^"]+)"', raw)
+            if m:
+                return m.group(1)
+    return ""
+
+
+def fetch_mimo(provider: dict[str, Any]) -> tuple[float | None, str]:
+    """Xiaomi MiMo.
+
+    Public API currently has no stable balance endpoint. Strategy:
+    1. Use provider api_key, or auto-import from ~/.config/mimocode/mimocode.jsonc
+    2. Validate key via GET /v1/models
+    3. If provider has manual `amount`, return that (user-maintained)
+    4. Otherwise return None with a clear note
+    """
+    from pathlib import Path as _Path  # local import if not already
+
+    key = str(provider.get("api_key") or "").strip()
+    if not key:
+        key = _load_mimo_key_from_mimocode()
+    amount = _parse_money(provider.get("amount"))
+    base = (provider.get("base_url") or "https://api.xiaomimimo.com").rstrip("/")
+    if base.endswith("/v1"):
+        root = base[:-3].rstrip("/")
+    else:
+        root = base
+
+    if not key:
+        return amount, "MiMo 未配置 Key（可自动读 mimocode.jsonc）"
+
+    # validate key
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    models_ok = False
+    model_note = ""
+    try:
+        data = _http_json(f"{root}/v1/models", headers)
+        ids = [str(x.get("id") or "") for x in (data.get("data") or []) if isinstance(x, dict)]
+        models_ok = bool(ids)
+        model_note = f"{len(ids)} models"
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return amount, f"MiMo Key 无效 HTTP {exc.code}"
+        model_note = f"models HTTP {exc.code}"
+    except Exception as exc:  # noqa: BLE001
+        model_note = f"models error: {exc}"
+
+    # try a few balance paths (in case they add later)
+    for path in (
+        f"{root}/v1/dashboard/billing/subscription",
+        f"{root}/v1/user/balance",
+        f"{root}/v1/billing/balance",
+        f"{root}/v1/account/balance",
+    ):
+        try:
+            data = _http_json(path, headers)
+        except Exception:
+            continue
+        for keypath in ("balance", "data.balance", "total_balance", "quota", "amount"):
+            val = _parse_money(_dig(data, keypath))
+            if val is not None:
+                return round(val, 4), f"MiMo {keypath}"
+
+    if amount is not None:
+        note = "MiMo 手动余额"
+        if models_ok:
+            note += f"（API Key 有效，{model_note}）"
+        else:
+            note += f"（{model_note or '无余额接口'}）"
+        return round(float(amount), 4), note
+
+    if models_ok:
+        return None, f"MiMo API Key 有效（{model_note}），官方暂无余额接口；请在 API 窗填「余额金额」"
+    return None, f"MiMo 余额不可用（{model_note or 'unknown'}）"
 
 
 def fetch_deepseek(api_key: str) -> tuple[float | None, str]:
@@ -226,6 +326,8 @@ FETCHERS: dict[str, Callable[..., tuple[float | None, str]]] = {
     "one_api": lambda p: fetch_openai_like(p.get("base_url") or "", p.get("access_token") or p.get("api_key") or ""),
     "openrouter": lambda p: fetch_openai_like("https://openrouter.ai", p.get("api_key") or ""),
     "deepseek": lambda p: fetch_deepseek(p.get("api_key") or ""),
+    "mimo": lambda p: fetch_mimo(p),
+    "xiaomi-mimo": lambda p: fetch_mimo(p),
     "anthropic": lambda p: fetch_anthropic_like(p.get("base_url") or "", p.get("api_key") or ""),
     "moonshot": lambda p: fetch_moonshot(p.get("api_key") or "", p.get("base_url") or "https://api.moonshot.cn"),
     "siliconflow": lambda p: fetch_siliconflow(p.get("api_key") or ""),
@@ -327,7 +429,6 @@ def load_balances(max_age_sec: float = 3600.0) -> list[BalanceItem]:
 
 def match_balance_for_model(model: str, items: list[BalanceItem]) -> BalanceItem | None:
     if not model:
-        # no model: prefer any provider-wide or first enabled amount
         for item in items:
             if item.amount is not None:
                 return item
@@ -337,12 +438,32 @@ def match_balance_for_model(model: str, items: list[BalanceItem]) -> BalanceItem
     for item in items:
         if item.model.lower() == m:
             return item
-    # provider token in model name (deepseek-v4-flash -> DeepSeek)
+    # token in model name (mimo-v2.5-pro / deepseek-v4-flash)
     for item in items:
         name = (item.provider_name or "").lower()
-        if name and name in m:
-            if item.model in {"(provider balance)", "*", ""} or item.amount is not None:
+        pid = (item.provider_id or "").lower()
+        model_in_item = (item.model or "").lower()
+        if name and (name in m or m.startswith(name) or name.replace(" ", "") in m):
+            if item.amount is not None or model_in_item in {"(provider balance)", "*", ""}:
                 return item
+        if pid and pid in m:
+            if item.amount is not None:
+                return item
+        if model_in_item and model_in_item in m:
+            if item.amount is not None:
+                return item
+    # provider-wide placeholder
+    for item in items:
+        if item.model in {"(provider balance)", "*", ""} and item.provider_name:
+            if item.provider_name.lower() in m or any(
+                token and token in m for token in item.provider_name.lower().split()
+            ):
+                return item
+    for item in items:
+        pid = (item.provider_id or "").lower()
+        if pid and pid in m and item.amount is not None:
+            return item
+    return None
     # provider-wide placeholder
     for item in items:
         if item.model in {"(provider balance)", "*", ""} and item.provider_name:

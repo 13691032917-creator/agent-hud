@@ -33,6 +33,18 @@ CARD_H = 720
 # 简化预设：国内平台默认人民币
 PRESETS: list[dict] = [
     {
+        "label": "MiMo",
+        "id": "mimo",
+        "name": "MiMo",
+        "type": "mimo",
+        "currency": "CNY",
+        "models": ["mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.5-asr"],
+        "base_url": "https://api.xiaomimimo.com",
+        "need_url": False,
+        "auto_key": True,
+        "need_amount": True,
+    },
+    {
         "label": "DeepSeek",
         "id": "deepseek",
         "name": "DeepSeek",
@@ -228,8 +240,22 @@ class ApiSimpleDialog:
         )
         cur_e.grid(row=4, column=1, sticky="w", pady=6, ipady=5)
 
+        self.amount_var = tk.StringVar()
+        self.amount_label = tk.Label(form, text="余额金额", bg=BG, fg=MUTED, font=self.fs, anchor="w")
+        self.amount_entry = tk.Entry(
+            form,
+            textvariable=self.amount_var,
+            bg="#1E2A3A",
+            fg=TEXT,
+            insertbackground=TEXT,
+            font=self.fm,
+            relief="solid",
+            bd=1,
+            width=12,
+        )
+
         # force minimum content height so fields never collapse
-        tk.Frame(form, height=8).grid(row=5, column=0, columnspan=2)
+        tk.Frame(form, height=8).grid(row=6, column=0, columnspan=2)
 
         # footer
         foot = tk.Frame(outer, bg=PANEL2)
@@ -279,6 +305,15 @@ class ApiSimpleDialog:
             self.url_var.set(preset.get("base_url") or "")
             self.url_entry.configure(state="normal")
         self.models_var.set(", ".join(preset.get("models") or []))
+
+        # amount row visibility
+        if preset.get("need_amount"):
+            self.amount_label.grid(row=5, column=0, sticky="w", padx=(0, 10), pady=6)
+            self.amount_entry.grid(row=5, column=1, sticky="w", pady=6, ipady=5)
+        else:
+            self.amount_label.grid_remove()
+            self.amount_entry.grid_remove()
+
         existing = next((p for p in self.providers if p.get("id") == preset["id"]), None)
         if existing:
             if existing.get("api_key"):
@@ -288,6 +323,19 @@ class ApiSimpleDialog:
             if existing.get("models"):
                 self.models_var.set(", ".join(existing["models"]))
             self.cur_var.set(existing.get("currency") or preset.get("currency") or "CNY")
+            amt = existing.get("amount")
+            self.amount_var.set("" if amt is None else str(amt))
+        else:
+            self.amount_var.set("")
+            if preset.get("auto_key") and preset["id"] == "mimo":
+                from .balances import _load_mimo_key_from_mimocode
+
+                auto = _load_mimo_key_from_mimocode()
+                if auto:
+                    self.key_var.set(auto)
+                    self.hint.config(text="已从 mimocode.jsonc 读到 MiMo Key；可填余额金额后保存")
+                    return
+
         self.hint.config(
             text="中转站：Key + Base URL 都要填"
             if preset.get("need_url")
@@ -307,13 +355,26 @@ class ApiSimpleDialog:
         url = self.url_var.get().strip()
         models = [m.strip() for m in self.models_var.get().replace("，", ",").split(",") if m.strip()]
         cur = (self.cur_var.get() or preset.get("currency") or "CNY").upper()
+        amount_raw = self.amount_var.get().strip()
+        amount = None
+        if amount_raw:
+            try:
+                amount = float(amount_raw)
+            except ValueError:
+                self.hint.config(text="余额金额请填数字，例如 18.5", fg=WARN)
+                return
         if preset.get("need_url") and not url:
             self.hint.config(text="中转站需要填写 Base URL", fg=WARN)
             return
         if not key and preset["type"] != "manual":
-            self.hint.config(text="请先粘贴 API Key", fg=WARN)
-            self.key_var.set("")
-            return
+            if preset.get("auto_key") and preset["id"] == "mimo":
+                from .balances import _load_mimo_key_from_mimocode
+
+                key = _load_mimo_key_from_mimocode()
+            if not key:
+                self.hint.config(text="请先粘贴 API Key", fg=WARN)
+                self.key_var.set("")
+                return
 
         provider = normalize_provider(
             {
@@ -322,9 +383,10 @@ class ApiSimpleDialog:
                 "type": preset["type"],
                 "api_key": key,
                 "access_token": key if preset["type"] in {"new_api", "one_api"} else "",
-                "base_url": url,
+                "base_url": url or preset.get("base_url") or "",
                 "models": models or preset.get("models") or [],
                 "currency": cur,
+                "amount": amount,
                 "enabled": True,
                 "note": "simple-api-form",
             }

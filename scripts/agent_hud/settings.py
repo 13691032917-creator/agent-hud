@@ -31,7 +31,7 @@ def normalize_provider(raw: dict[str, Any]) -> dict[str, Any]:
     p.setdefault("enabled", False)
     p.setdefault("currency", "")
     p.setdefault("note", "")
-    cn_types = {"deepseek", "moonshot", "siliconflow", "new_api", "one_api", "zhipu", "qwen"}
+    cn_types = {"deepseek", "moonshot", "siliconflow", "new_api", "one_api", "zhipu", "qwen", "mimo", "xiaomi-mimo"}
     if p.get("type") in cn_types:
         p["currency"] = "CNY"
     if not p.get("currency"):
