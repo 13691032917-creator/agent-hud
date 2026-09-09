@@ -82,21 +82,100 @@ def fetch_openai_like(base_url: str, api_key: str) -> tuple[float | None, str]:
     return None, "no billing endpoint matched"
 
 
+def _parse_money(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip() or "0")
+        except ValueError:
+            return None
+    return None
+
+
 def fetch_deepseek(api_key: str) -> tuple[float | None, str]:
-    headers = {"Authorization": f"Bearer {api_key}"}
-    data = _http_json("https://api.deepseek.com/user/balance", headers)
-    info = _dig(data, "data") or {}
-    # is_available + balance grants
-    total = 0.0
-    granted = info.get("granted_balance")
-    topped = info.get("topped_up_balance")
-    if isinstance(granted, (int, float)):
-        total += float(granted)
-    if isinstance(topped, (int, float)):
-        total += float(topped)
-    if total or granted is not None:
-        return round(total, 4), "DeepSeek balance"
-    return None, "DeepSeek balance unavailable"
+    """DeepSeek official balance.
+
+    Documented shape:
+    {
+      "is_available": true,
+      "balance_infos": [
+        {"currency": "CNY", "total_balance": "1.23", "granted_balance": "...", "topped_up_balance": "..."}
+      ]
+    }
+    """
+    if not api_key:
+        return None, "empty api_key"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    last_note = "DeepSeek balance unavailable"
+    for url in (
+        "https://api.deepseek.com/user/balance",
+        "https://api.deepseek.com/v1/user/balance",
+    ):
+        try:
+            data = _http_json(url, headers)
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace")[:160]
+            except Exception:
+                pass
+            last_note = f"HTTP {exc.code}: {body or exc.reason}"
+            continue
+        except Exception as exc:  # noqa: BLE001
+            last_note = f"request error: {exc}"
+            continue
+        if not isinstance(data, dict):
+            last_note = "invalid json"
+            continue
+
+        infos = data.get("balance_infos")
+        if not isinstance(infos, list):
+            nested = _dig(data, "data.balance_infos")
+            if isinstance(nested, list):
+                infos = nested
+            elif isinstance(_dig(data, "data"), dict) and "balance_infos" not in (data.get("data") or {}):
+                # maybe flat legacy fields under data
+                infos = [data.get("data") or {}]
+            else:
+                infos = []
+
+        preferred = None
+        for row in infos:
+            if not isinstance(row, dict):
+                continue
+            cur = str(row.get("currency") or "CNY").upper()
+            total = _parse_money(row.get("total_balance"))
+            if total is None:
+                granted = _parse_money(row.get("granted_balance")) or 0.0
+                topped = _parse_money(row.get("topped_up_balance")) or 0.0
+                total = granted + topped
+            if total is None:
+                continue
+            item = (cur, total, row)
+            if preferred is None:
+                preferred = item
+            if cur == "CNY":
+                preferred = item
+                break
+
+        if preferred:
+            cur, total, row = preferred
+            note = f"DeepSeek {cur} total_balance"
+            if data.get("is_available") is False:
+                note += " (is_available=false)"
+            return round(float(total), 4), note
+
+        # fallback top-level numbers
+        for key in ("total_balance", "balance", "data.balance"):
+            val = _parse_money(_dig(data, key))
+            if val is not None:
+                return round(val, 4), f"DeepSeek {key}"
+
+        last_note = f"no balance field: keys={list(data.keys())[:8]}"
+    return None, last_note
 
 
 def fetch_anthropic_like(base_url: str, api_key: str) -> tuple[float | None, str]:

@@ -158,9 +158,9 @@ class ApiSimpleDialog:
         outer = tk.Frame(self.win, bg=BG)
         outer.pack(fill="both", expand=True)
 
-        # form area (top)
+        # form area (top) — pack top so fields stay visible even if footer grows
         form = tk.Frame(outer, bg=BG)
-        form.pack(fill="both", expand=True, padx=16, pady=(16, 8))
+        form.pack(side="top", fill="both", expand=True, padx=16, pady=(16, 8))
         form.columnconfigure(1, weight=1)
 
         def label(r: int, text: str) -> None:
@@ -233,7 +233,7 @@ class ApiSimpleDialog:
 
         # footer
         foot = tk.Frame(outer, bg=PANEL2)
-        foot.pack(fill="x", side="bottom")
+        foot.pack(side="bottom", fill="x")
         self.hint = tk.Label(
             foot, text="填 Key 后点保存", bg=PANEL2, fg=MUTED, font=self.fs, anchor="w", wraplength=440
         )
